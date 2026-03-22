@@ -6,7 +6,6 @@ from langchain_chroma import Chroma
 from langchain.chains import RetrievalQA
 from langchain_groq import ChatGroq
 
-
 # =========================
 # 1. Load Groq API Key
 # =========================

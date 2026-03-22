@@ -2,8 +2,10 @@
 
 import sqlite3
 import time
+import os
 
-DB_NAME = "chat.db"
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+DB_NAME = os.path.join(BASE_DIR, "chat.db")
 
 
 # =========================
@@ -63,21 +65,17 @@ def create_chat():
 # 📋 GET ALL CHATS
 # =========================
 def get_all_chats():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
+    with sqlite3.connect(DB_NAME, timeout=10) as conn:
+        c = conn.cursor()
 
-    c.execute("""
-        SELECT id, title FROM chats
-        ORDER BY created_at DESC
-    """)
+        c.execute("""
+            SELECT id, title FROM chats
+            ORDER BY created_at DESC
+        """)
 
-    rows = c.fetchall()
-    conn.close()
+        rows = c.fetchall()
 
-    return [
-        {"id": row[0], "title": row[1]}
-        for row in rows
-    ]
+        return [{"id": r[0], "title": r[1]} for r in rows]
 
 
 # =========================
@@ -103,10 +101,13 @@ def save_message(chat_id, role, text):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
+    # 🔥 đảm bảo unicode safe
+    safe_text = str(text)
+
     c.execute("""
-        INSERT INTO messages (chat_id, role, text, timestamp)
-        VALUES (?, ?, ?, ?)
-    """, (chat_id, role, text, time.time()))
+            INSERT INTO messages (chat_id, role, text, timestamp)
+            VALUES (?, ?, ?, ?)
+    """, (chat_id, role, safe_text, time.time()))
 
     conn.commit()
     conn.close()
