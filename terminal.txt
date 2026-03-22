@@ -1,16 +1,11 @@
-# Thoát base env
-conda deactivate
-# Tạo env mới
-python -m venv rag_env
-# Activate env
- rag_env\Scripts\activate
-
+python -m venv rag_env //Tạo env mới
+rag_env\Scripts\activate  //     activate  env mới
+conda deactivate // deactivate base env
 pip install -r requirements.txt // install lần đầu
 pip install --no-cache-dir -r requirements.txt //nếu requirement thay đổi
 
-# Tạo chroma_db
-python build_db.py
-
-# chạy chương trình
+//build thư viện chromadb để tải thông tin hugging face
+python database/build_db.py
+// chạy chương trình
 python app.py
 
