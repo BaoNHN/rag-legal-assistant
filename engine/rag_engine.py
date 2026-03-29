@@ -39,7 +39,9 @@ vectorstore = Chroma(
     embedding_function=embedding
 )
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 1})
+retriever = vectorstore.as_retriever(
+    search_kwargs={"k": 3}
+)
 
 
 # =========================
@@ -48,7 +50,7 @@ retriever = vectorstore.as_retriever(search_kwargs={"k": 1})
 llm = ChatGroq(
     model="llama-3.1-8b-instant",
     temperature=0,
-    max_tokens=512,   # 🔥 thêm dòng này
+    max_tokens=512,
     api_key=GROQ_API_KEY
 )
 
@@ -56,7 +58,7 @@ llm = ChatGroq(
 # =========================
 # 5. RAG Chain
 # =========================
-qa_chain = RetrievalQA.from_chain_type(
+qa_chfain = RetrievalQA.from_chain_type(
     llm=llm,
     retriever=retriever,
     return_source_documents=True
@@ -73,7 +75,7 @@ def ask_rag(question: str) -> str:
         answer = result.get("result", "")
 
         sources = "\n".join([
-            f"- {doc.metadata.get('title','')} \n  🔗 {doc.metadata.get('url','')}"
+            f"- {doc.metadata.get('title', '')} \n  🔗 {doc.metadata.get('url', '')}"
             for doc in result.get("source_documents", [])
         ])
 

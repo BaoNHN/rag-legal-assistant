@@ -1,93 +1,99 @@
 # build_db.py
 
 import os
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY"] = "False"
 
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-os.environ["HF_HUB_TIMEOUT"] = "60"   # tăng timeout
-os.environ["HF_HUB_MAX_RETRIES"] = "10"
-
-from datasets import load_dataset
+import pandas as pd
 from langchain.schema import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-print("🔄 Loading metadata...")
+# =========================
+# 📂 PATH
+# =========================
 
-# ✅ Load metadata (nhẹ)
-meta_ds = load_dataset(
-    "th1nhng0/vietnamese-legal-documents",
-    "metadata",
-    split="data"
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+
+CONTENT_PATH = os.path.join(BASE_DIR, "data", "data-00000-of-00011.parquet")
+META_PATH = os.path.join(BASE_DIR, "data", "metadata.parquet")
+DB_PATH = os.path.join(BASE_DIR, "chroma_db")
+
+# =========================
+# LOAD DATA
+# =========================
+
+print("🔄 Loading parquet...")
+
+df_content = pd.read_parquet(CONTENT_PATH)
+
+if os.path.exists(META_PATH):
+    df_meta = pd.read_parquet(META_PATH)
+    df = df_content.merge(df_meta, on="id", how="left")
+else:
+    df = df_content
+
+print("✅ Data loaded:", df.shape)
+
+# =========================
+# ⚙️ CONFIG
+# =========================
+
+MAX_DOCS = 1000 # scan rộng hơn để tìm đủ doc
+CHUNK_SIZE = 600
+CHUNK_OVERLAP = 80
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=CHUNK_SIZE,
+    chunk_overlap=CHUNK_OVERLAP
 )
-
-meta_dict = {item["id"]: item for item in meta_ds}
-
-print(f"✅ Metadata loaded: {len(meta_dict)}")
-
-print("🔄 Streaming content...")
-
-# ✅ Streaming content (nặng)
-content_ds = load_dataset(
-    "th1nhng0/vietnamese-legal-documents",
-    "content",
-    split="data",
-    streaming=True
-)
-
-MAX_DOCS = 2000
 
 docs = []
 
-for i, item in enumerate(content_ds):
+print("🔄 Processing + chunking...")
 
-    if i >= 5000:   # scan rộng hơn để tìm đủ doc
-        break
-
-    doc_id = item.get("id")
-    content = item.get("content", "")
-
-    if not content or not content.strip():
-        continue
-
-    meta = meta_dict.get(doc_id, {})
-
-    # 🔥 FILTER DOANH NGHIỆP
-    sectors = meta.get("legal_sectors", "").lower()
-
-    if "doanh nghiệp" not in sectors:
-        continue
-
-    # 🔥 truncate tránh 413
-    content = content[:1000]
-
-    full_text = f"""
-Tiêu đề: {meta.get("title", "")}
-Lĩnh vực: {sectors}
-
-{content}
-"""
-
-    docs.append(
-        Document(
-            page_content=full_text,
-            metadata={
-                "title": meta.get("title", ""),
-                "url": meta.get("url", "")
-            }
-        )
-    )
+for i, row in df.iterrows():
 
     if len(docs) >= MAX_DOCS:
         break
 
+    content = str(row.get("content", "")).strip()
+
+    if not content:
+        continue
+
+    # 🎯 FILTER doanh nghiệp
+    sectors = str(row.get("legal_sectors", "")).lower()
+    if "doanh nghiệp" not in sectors:
+        continue
+
+    # 🧠 CHUNK (KHÔNG truncate nữa)
+    chunks = splitter.split_text(content)
+
+    for chunk in chunks:
+        docs.append(
+            Document(
+                page_content=chunk,
+                metadata={
+                    "id": row.get("id"),
+                    "title": row.get("title", ""),
+                    "url": row.get("url", ""),
+                    "legal_type": row.get("legal_type", ""),
+                    "source": row.get("document_number", "")
+                }
+            )
+        )
+
     if i % 200 == 0:
-        print(f"📄 Scanned: {i} | Collected: {len(docs)}")
+        print(f"📄 Processed rows: {i} | Docs: {len(docs)}")
 
 print(f"✅ Total docs: {len(docs)}")
 
 # =========================
-# Embedding
+# 🧠 EMBEDDING
 # =========================
+
 print("🔄 Loading embedding model...")
 
 embedding = HuggingFaceEmbeddings(
@@ -95,14 +101,15 @@ embedding = HuggingFaceEmbeddings(
 )
 
 # =========================
-# Build Chroma DB
+# 💾 BUILD CHROMA
 # =========================
+
 print("💾 Building Chroma DB...")
 
-Chroma.from_documents(
+vectorstore = Chroma.from_documents(
     docs,
     embedding,
-    persist_directory="./chroma_db"
+    persist_directory=DB_PATH
 )
 
-print("🎉 DONE: DB created successfully!")
+print("🎉 DONE: DB ready!")
