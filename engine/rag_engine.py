@@ -1,90 +1,126 @@
-# rag_engine.py
-
 import os
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
-from langchain.chains import RetrievalQA
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 
 # =========================
-# 1. Load Groq API Key
+# CONFIG
 # =========================
-def load_groq_key(path="groqkey.txt"):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            key = f.read().strip()
-            if not key:
-                raise ValueError("Empty API key")
-            return key
-    except Exception as e:
-        raise ValueError(f"❌ Cannot read groqkey.txt: {e}")
 
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+DB_PATH = os.path.join(BASE_DIR, "chroma_db")
 
-GROQ_API_KEY = load_groq_key()
-
+# 🔐 load API key
+with open(os.path.join(BASE_DIR, "groqkey.txt"), "r") as f:
+    GROQ_API_KEY = f.read().strip()
 
 # =========================
-# 2. Embedding
+# EMBEDDING
 # =========================
+
 embedding = HuggingFaceEmbeddings(
     model_name="BAAI/bge-small-en-v1.5"
 )
 
+# =========================
+# VECTOR STORE
+# =========================
 
-# =========================
-# 3. Load Chroma DB
-# =========================
 vectorstore = Chroma(
-    persist_directory="../chroma_db",
+    persist_directory=DB_PATH,
     embedding_function=embedding
 )
 
 retriever = vectorstore.as_retriever(
-    search_kwargs={"k": 3}
+    search_kwargs={"k": 3}   # 🔥 quan trọng
 )
 
+# =========================
+# LLM (GROQ)
+# =========================
 
-# =========================
-# 4. LLM (Groq)
-# =========================
 llm = ChatGroq(
+    api_key=GROQ_API_KEY,
     model="llama-3.1-8b-instant",
-    temperature=0,
-    max_tokens=512,
-    api_key=GROQ_API_KEY
+    temperature=0
 )
 
+# =========================
+# RAG FUNCTION
+# =========================
 
-# =========================
-# 5. RAG Chain
-# =========================
-qa_chfain = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=retriever,
-    return_source_documents=True
-)
-
-
-# =========================
-# 6. Ask function
-# =========================
 def ask_rag(question: str) -> str:
     try:
-        result = qa_chain.invoke({"query": question})
+        # 🔥 fix unicode input
+        question = str(question).encode("utf-8", "ignore").decode("utf-8")
 
-        answer = result.get("result", "")
+        # =========================
+        # 1. RETRIEVE
+        # =========================
+        docs = retriever.invoke(question)
 
+        if not docs:
+            return "❌ Không tìm thấy thông tin phù hợp."
+
+        # =========================
+        # 2. BUILD CONTEXT (TRÁNH 413)
+        # =========================
+        context_parts = []
+        total_chars = 0
+        MAX_CONTEXT = 4000   # 🔥 tránh token limit
+
+        for d in docs:
+            text = d.page_content.strip()
+
+            if total_chars + len(text) > MAX_CONTEXT:
+                break
+
+            context_parts.append(text)
+            total_chars += len(text)
+
+        context = "\n\n".join(context_parts)
+
+        # =========================
+        # 3. PROMPT
+        # =========================
+        prompt = f"""
+Bạn là trợ lý pháp lý Việt Nam.
+
+Dựa vào tài liệu sau:
+{context}
+
+Câu hỏi: {question}
+
+Trả lời rõ ràng, dễ hiểu, có thể trích dẫn luật nếu cần.
+"""
+
+        # =========================
+        # 4. LLM CALL
+        # =========================
+        response = llm.invoke(prompt)
+
+        answer = response.content
+
+        # =========================
+        # 5. SOURCE
+        # =========================
         sources = "\n".join([
-            f"- {doc.metadata.get('title', '')} \n  🔗 {doc.metadata.get('url', '')}"
-            for doc in result.get("source_documents", [])
+            f"- {d.metadata.get('title','')} \n  🔗 {d.metadata.get('url','')}"
+            for d in docs
         ])
 
-        return (
+        final_text = (
             "🤖 Trả lời:\n"
             + answer
             + "\n\n📖 Nguồn:\n"
             + sources
         )
 
+        # 🔥 fix unicode output
+        final_text = final_text.encode("utf-8", "ignore").decode("utf-8")
+
+        return final_text
+
     except Exception as e:
-        return f"❌ Lỗi hệ thống: {str(e)}"
+        print("RAG ERROR:", repr(e))
+        return "❌ Lỗi hệ thống. Vui lòng thử lại."
