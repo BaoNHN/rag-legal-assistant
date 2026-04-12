@@ -17,8 +17,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 # =========================
 
 MAX_DOCS = 1000
-CHUNK_SIZE = 600
-CHUNK_OVERLAP = 80
+CHUNK_SIZE = 400
+CHUNK_OVERLAP = 100
 
 # =========================
 # LOAD METADATA (NHẸ)

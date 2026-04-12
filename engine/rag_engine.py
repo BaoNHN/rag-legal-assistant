@@ -32,7 +32,7 @@ vectorstore = Chroma(
 )
 
 retriever = vectorstore.as_retriever(
-    search_kwargs={"k": 3}   # 🔥 quan trọng
+    search_kwargs={"k": 5}
 )
 
 # =========================
@@ -46,60 +46,150 @@ llm = ChatGroq(
 )
 
 # =========================
-# RAG FUNCTION
+# 🔥 CLEAN TEXT
 # =========================
 
-def ask_rag(question: str) -> str:
+def clean_answer(text: str) -> str:
+    # remove greeting
+    text = re.sub(r"(?i)^xin chào.*?\n", "", text)
+
+    # remove duplicate lines
+    lines = text.split("\n")
+    seen = set()
+    cleaned = []
+    for l in lines:
+        if l.strip() and l not in seen:
+            cleaned.append(l)
+            seen.add(l)
+
+    return "\n".join(cleaned).strip()
+
+
+# =========================
+# 🔥 QUERY REWRITE
+# =========================
+
+def rewrite_query(question: str) -> str:
+    prompt = f"""
+Viết lại câu hỏi ngắn gọn, rõ nghĩa để tìm trong luật:
+
+{question}
+"""
     try:
-        # 🔥 fix unicode input
-        question = str(question).encode("utf-8", "ignore").decode("utf-8")
+        return llm.invoke(prompt).content.strip()
+    except:
+        return question
 
-        # =========================
-        # 1. RETRIEVE
-        # =========================
-        docs = retriever.invoke(question)
 
-        if not docs:
-            return "❌ Không tìm thấy thông tin phù hợp."
+# =========================
+# 🔥 RERANK (CHỈ LẤY 1 DOC)
+# =========================
 
-        # =========================
-        # 2. BUILD CONTEXT (TRÁNH 413)
-        # =========================
-        context_parts = []
-        total_chars = 0
-        MAX_CONTEXT = 4000   # 🔥 tránh token limit
+def select_best_doc(question, docs):
+    best_doc = None
+    best_score = -1
 
-        for d in docs:
-            text = d.page_content.strip()
+    q_words = set(question.lower().split())
 
-            if total_chars + len(text) > MAX_CONTEXT:
-                break
+    for d in docs:
+        text = d.page_content.lower()
+        score = sum(1 for w in q_words if w in text)
 
-            context_parts.append(text)
-            total_chars += len(text)
+        if score > best_score:
+            best_score = score
+            best_doc = d
 
-        context = "\n\n".join(context_parts)
+    return best_doc
+
+
+# =========================
+# 🔥 CLASSIFY
+# =========================
+
+def classify_question(q):
+    q = q.lower()
+
+    if "bước" in q or "cách" in q:
+        return "procedure"
+    if "điều kiện" in q:
+        return "condition"
+    if "là gì" in q:
+        return "definition"
+    return "general"
+
 
         # =========================
         # 3. PROMPT
         # =========================
         prompt = f"""
+# =========================
+# 🔥 BUILD PROMPT (ANTI-LOẠN)
+# =========================
+
+def build_prompt(context, question, q_type):
+    base = f"""
 Bạn là trợ lý pháp lý Việt Nam.
 
-Dựa vào tài liệu sau:
+⚠️ QUY TẮC:
+- Chỉ trả lời 1 cách duy nhất
+- Không chào hỏi
+- Không giải thích dư
+- Không đưa nhiều phương án
+
+Tài liệu:
 {context}
 
 Câu hỏi: {question}
 
-Trả lời rõ ràng, dễ hiểu, có thể trích dẫn luật nếu cần.
 """
 
-        # =========================
-        # 4. LLM CALL
-        # =========================
-        response = llm.invoke(prompt)
+    if q_type == "procedure":
+        base += "Trả lời dạng các bước rõ ràng (1,2,3...)."
+    elif q_type == "condition":
+        base += "Chỉ liệt kê các điều kiện."
+    elif q_type == "definition":
+        base += "Trả lời ngắn gọn định nghĩa."
+    else:
+        base += "Trả lời ngắn gọn, đúng trọng tâm."
 
-        answer = response.content
+    return base
+
+
+# =========================
+# 🔥 MAIN
+# =========================
+
+def ask_rag(question: str) -> str:
+    try:
+        question = str(question)
+
+        # STEP 1: rewrite
+        better_q = rewrite_query(question)
+
+        # STEP 2: retrieve
+        docs = retriever.invoke(better_q)
+
+        if not docs:
+            return "❌ Không tìm thấy thông tin."
+
+        # STEP 3: chọn doc tốt nhất
+        best_doc = select_best_doc(better_q, docs)
+
+        if not best_doc:
+            return "❌ Không đủ dữ liệu."
+
+        # STEP 4: context limit
+        context = best_doc.page_content[:3000]
+
+        # STEP 5: classify
+        q_type = classify_question(question)
+
+        # STEP 6: prompt
+        prompt = build_prompt(context, question, q_type)
+
+        # STEP 7: LLM
+        response = llm.invoke(prompt)
+        answer = response.content.strip()
 
         # =========================
         # 5. SOURCE
@@ -108,19 +198,14 @@ Trả lời rõ ràng, dễ hiểu, có thể trích dẫn luật nếu cần.
             f"- {d.metadata.get('title','')} \n  🔗 {d.metadata.get('url','')}"
             for d in docs
         ])
+        # STEP 8: clean output
+        answer = clean_answer(answer)
 
-        final_text = (
-            "🤖 Trả lời:\n"
-            + answer
-            + "\n\n📖 Nguồn:\n"
-            + sources
-        )
+        # STEP 9: source
+        source = f"\n\n📖 Nguồn:\n- {best_doc.metadata.get('title','')}\n  🔗 {best_doc.metadata.get('url','')}"
 
-        # 🔥 fix unicode output
-        final_text = final_text.encode("utf-8", "ignore").decode("utf-8")
-
-        return final_text
+        return answer + source
 
     except Exception as e:
-        print("RAG ERROR:", repr(e))
-        return "❌ Lỗi hệ thống. Vui lòng thử lại."
+        print("RAG ERROR:", e)
+        return "❌ Lỗi hệ thống."

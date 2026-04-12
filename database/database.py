@@ -15,16 +15,26 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
-    # bảng chats
+    # 👤 students
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS students (
+            student_id INTEGER PRIMARY KEY,
+            student_name TEXT,
+            password TEXT
+        )
+    """)
+
+    # 💬 chats (THÊM student_id)
     c.execute("""
         CREATE TABLE IF NOT EXISTS chats (
             id TEXT PRIMARY KEY,
+            student_id INTEGER,
             title TEXT,
             created_at REAL
         )
     """)
 
-    # bảng messages
+    # 💬 messages (giữ nguyên)
     c.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +44,13 @@ def init_db():
             timestamp REAL
         )
     """)
-
+    # Add student for testing
+    c.execute("SELECT * FROM students WHERE student_id=1")
+    if not c.fetchone():
+        c.execute("""
+            INSERT INTO students (student_id, student_name, password)
+            VALUES (1, 'test', '123');
+        """)
     conn.commit()
     conn.close()
 
@@ -42,7 +58,7 @@ def init_db():
 # =========================
 # 🆕 CREATE CHAT
 # =========================
-def create_chat():
+def create_chat(student_id):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
@@ -51,8 +67,8 @@ def create_chat():
     created_at = time.time()
 
     c.execute(
-        "INSERT INTO chats (id, title, created_at) VALUES (?, ?, ?)",
-        (chat_id, title, created_at)
+        "INSERT INTO chats (id, student_id, title, created_at) VALUES (?, ?, ?, ?)",
+        (chat_id, student_id, title, created_at)
     )
 
     conn.commit()
@@ -64,14 +80,15 @@ def create_chat():
 # =========================
 # 📋 GET ALL CHATS
 # =========================
-def get_all_chats():
-    with sqlite3.connect(DB_NAME, timeout=10) as conn:
+def get_all_chats(student_id):
+    with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
 
         c.execute("""
             SELECT id, title FROM chats
+            WHERE student_id=?
             ORDER BY created_at DESC
-        """)
+        """, (student_id,))
 
         rows = c.fetchall()
 

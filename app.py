@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, session, redirect
 from engine.rag_engine import ask_rag
 from database.database import (
     init_db,
@@ -10,6 +10,7 @@ from database.database import (
 )
 
 app = Flask(__name__)
+app.secret_key = "secret_key"
 
 # init DB
 init_db()
@@ -17,8 +18,37 @@ init_db()
 
 @app.route("/")
 def home():
+    if "student_id" not in session:
+        return render_template("login.html")
     return render_template("index.html")
 
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    student_name = data.get("student_name")
+    password = data.get("password")
+
+    import sqlite3
+    conn = sqlite3.connect("chat.db")
+    c = conn.cursor()
+
+    c.execute(
+        "SELECT student_id FROM students WHERE student_name=? AND password=?",
+        (student_name, password)
+    )
+
+    user = c.fetchone()
+    conn.close()
+
+    if user:
+        session["student_id"] = user[0]
+        return jsonify({"status": "success"})
+    return jsonify({"status": "fail"}), 401
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"status": "ok"})
 
 # =========================
 # CHAT API (RAG)
@@ -65,13 +95,19 @@ def chatbot():
 
 @app.route("/list_chats", methods=["GET"])
 def api_list_chats():
-    chats = get_all_chats()
+    if "student_id" not in session:
+        return jsonify([])
+
+    chats = get_all_chats(session["student_id"])
     return jsonify(chats)
 
 
 @app.route("/create_chat", methods=["POST"])
 def api_create_chat():
-    chat_id = create_chat()
+    if "student_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    chat_id = create_chat(session["student_id"])
     return jsonify({"chat_id": chat_id})
 
 @app.route("/rename_chat", methods=["POST"])

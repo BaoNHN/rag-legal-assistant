@@ -296,3 +296,8 @@ chatInput.addEventListener("keydown", function (event) {
         sendButton.click();
     }
 });
+
+function logout() {
+    fetch("/logout", { method: "POST" })
+    .then(() => window.location.href = "/")
+}
