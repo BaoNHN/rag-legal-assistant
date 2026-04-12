@@ -1,4 +1,5 @@
 import os
+import re
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
@@ -118,10 +119,6 @@ def classify_question(q):
     return "general"
 
 
-        # =========================
-        # 3. PROMPT
-        # =========================
-        prompt = f"""
 # =========================
 # 🔥 BUILD PROMPT (ANTI-LOẠN)
 # =========================
@@ -191,13 +188,6 @@ def ask_rag(question: str) -> str:
         response = llm.invoke(prompt)
         answer = response.content.strip()
 
-        # =========================
-        # 5. SOURCE
-        # =========================
-        sources = "\n".join([
-            f"- {d.metadata.get('title','')} \n  🔗 {d.metadata.get('url','')}"
-            for d in docs
-        ])
         # STEP 8: clean output
         answer = clean_answer(answer)
 
