@@ -49,7 +49,7 @@ def init_db():
     if not c.fetchone():
         c.execute("""
             INSERT INTO students (student_id, student_name, password)
-            VALUES (1, 'test', '123');
+            VALUES (1, 'testStudent1', '123456P@ss');
         """)
     conn.commit()
     conn.close()
