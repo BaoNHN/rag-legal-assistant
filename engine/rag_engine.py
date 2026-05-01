@@ -192,7 +192,15 @@ def ask_rag(question: str) -> str:
         answer = clean_answer(answer)
 
         # STEP 9: source
-        source = f"\n\n📖 Nguồn:\n- {best_doc.metadata.get('title','')}\n  🔗 {best_doc.metadata.get('url','')}"
+        m = best_doc.metadata
+        soky = m.get('so_ky_hieu', '')
+        loai = m.get('loai_van_ban', '')
+        nguon = m.get('nguon_thu_thap', '')
+
+        cite_id = f"{loai} {soky}".strip() or m.get('title', '')
+        source = f"\n\n📖 Nguồn: {cite_id}"
+        if nguon:
+            source += f" — {nguon}"
 
         return answer + source
 
