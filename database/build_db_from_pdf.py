@@ -1,10 +1,6 @@
-# build_db_from_pdf.py  —  VietOCR version (accuracy-optimized)
-# - Suppresses batch_first warning
-# - Beamsearch ON for better accuracy
-# - Higher DPI default
-# - Better line detection (padding + min-height tuned)
-# - Image preprocessing (contrast + sharpness boost)
-# - Full article text, multi-page articles handled correctly
+# build_db_from_pdf.py  —  VietOCR version
+# SETUP:
+#   Download poppler → put in project_root/poppler/Library/bin/
 #
 # USAGE:
 #   conda activate rag_env
