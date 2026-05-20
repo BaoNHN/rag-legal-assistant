@@ -64,8 +64,8 @@ print(f"   Clean text: {len(cleaned):,} characters")
 # =========================
 print("Segmenting by legal article (Điều)...")
 
-pattern    = r'(?=Điều\s+\d+[a-z]?[\.\s])'
-raw_splits = re.split(pattern, cleaned)
+pattern    = r'(?:(?:^|\n)(?=Điều\s+\d+[a-z]?[.,]\s))'
+raw_splits = re.split(pattern, cleaned, flags=re.MULTILINE)
 
 # Filter noise
 segments_raw = [s.strip() for s in raw_splits if len(s.strip()) > 50]

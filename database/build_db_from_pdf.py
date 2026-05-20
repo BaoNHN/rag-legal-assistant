@@ -50,7 +50,6 @@ def detect_device():
             if line.startswith("DEVICE="):
                 value = line.split("=", 1)[1].strip().lower()
                 if value == "cuda":
-                    import torch
                     if torch.cuda.is_available():
                         gpu_name = torch.cuda.get_device_name(0)
                         print(f"  GPU detected: {gpu_name}")
@@ -62,7 +61,6 @@ def detect_device():
                     print("  Device config: cpu")
                     return "cpu"
     # Fallback: auto-detect via torch
-    import torch
     if torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
         print(f"  GPU auto-detected: {gpu_name}")
@@ -188,18 +186,29 @@ def detect_lines_opencv(pil_image):
 
         raw_boxes.sort(key=lambda b: b[0])
 
-        # Stage 2: split any box taller than MAX_LINE_H
+        # Stage 2: split tall boxes, skip non-text regions
+        # MAX_LINE_H: single text line ceiling (measured: avg=67px, max=92px)
+        # SKIP_H: boxes taller than this are stamps/seals/signatures → skip
+        MAX_LINE_H = 110   # single line ceiling
+        SKIP_H     = 400   # stamp/seal/signature area → skip entirely
+
         final_boxes = []
         for y1, y2 in raw_boxes:
             box_h = y2 - y1
+
+            # Skip stamp, seal, signature, table areas — too tall to be text
+            if box_h > SKIP_H:
+                continue
+
             if box_h <= MAX_LINE_H:
-                # Normal single line — add padding for diacritics
+                # Normal single line — add padding for Vietnamese diacritics
                 final_boxes.append((
                     max(0, y1 - 4),
                     min(img_h, y2 + 4)
                 ))
             else:
-                # Tall box — re-detect lines within this region
+                # Merged box (e.g. Điều title + artifact dots below it)
+                # Re-detect individual lines within this region
                 region = binary[y1:y2, :]
                 sub_dilated = cv2.dilate(region, kernel, iterations=1)
                 sub_cnts, _ = cv2.findContours(
@@ -208,18 +217,23 @@ def detect_lines_opencv(pil_image):
                 sub_boxes = []
                 for sc in sub_cnts:
                     sx, sy, sw, sh = cv2.boundingRect(sc)
-                    if sh >= 10 and sw >= 80:
+                    if sh >= 10 and sw >= MIN_WIDTH:
                         sub_boxes.append((y1 + sy, y1 + sy + sh))
+
                 if sub_boxes:
                     sub_boxes.sort(key=lambda b: b[0])
                     for sy1, sy2 in sub_boxes:
-                        final_boxes.append((
-                            max(0, sy1 - 4),
-                            min(img_h, sy2 + 4)
-                        ))
+                        sh = sy2 - sy1
+                        # Skip sub-boxes that are still too tall (e.g. stamps)
+                        if sh <= MAX_LINE_H:
+                            final_boxes.append((
+                                max(0, sy1 - 4),
+                                min(img_h, sy2 + 4)
+                            ))
                 else:
-                    # Fallback: keep original box
-                    final_boxes.append((max(0, y1-4), min(img_h, y2+4)))
+                    # Fallback: keep if reasonable height
+                    if box_h <= MAX_LINE_H * 2:
+                        final_boxes.append((max(0, y1-4), min(img_h, y2+4)))
 
         final_boxes.sort(key=lambda b: b[0])
         return final_boxes
@@ -233,21 +247,19 @@ def detect_lines_projection(pil_image):
     Less accurate than OpenCV but has no extra dependencies.
     """
     gray = pil_image.convert('L')
-    arr = np.array(gray)
+    arr  = np.array(gray)
     row_darkness = (arr < 200).sum(axis=1)
 
-    in_line = False
+    in_line     = False
     line_starts = []
-    line_ends = []
+    line_ends   = []
 
     for i, dark in enumerate(row_darkness):
         if dark > 5 and not in_line:
             in_line = True
-            # Add padding above line for ascenders (é, ắ, etc.)
             line_starts.append(max(0, i - 4))
         elif dark <= 2 and in_line:
             in_line = False
-            # Add padding below line for descenders (g, p, y, etc.)
             line_ends.append(min(arr.shape[0], i + 4))
 
     if in_line:
@@ -284,10 +296,8 @@ def ocr_page(pil_image):
     lines_text = []
     for y1, y2 in boxes:
         line_height = y2 - y1
-        # Skip tiny fragments
         if line_height < 10:
             continue
-        # Crop full width of the line
         line_img = pil_image.crop((0, y1, width, y2))
         try:
             text = detector.predict(line_img)
@@ -400,8 +410,8 @@ full_text = re.sub(r'\n{3,}', '\n\n', full_text)
 full_text = re.sub(r'[ \t]+', ' ', full_text).strip()
 
 # Split on "Điều X." — lookahead keeps delimiter at start of each segment
-pattern = r'(?=Điều\s+\d+[a-z]?[\.\s])'
-raw_splits = re.split(pattern, full_text)
+pattern    = r'(?:(?:^|\n)(?=Điều\s+\d+[a-z]?[.,]\s))'
+raw_splits = re.split(pattern, full_text, flags=re.MULTILINE)
 
 segments_raw = [s.strip() for s in raw_splits if len(s.strip()) > 50]
 print(f"Found {len(segments_raw)} legal article segments.")
@@ -409,8 +419,8 @@ print(f"Found {len(segments_raw)} legal article segments.")
 # Fallback: fixed-size chunks if article detection fails
 if len(segments_raw) < 10:
     print("Warning: few articles detected — using fixed-size chunking as fallback.")
-    chunk_size = 3000
-    overlap = 300
+    chunk_size   = 3000
+    overlap      = 300
     segments_raw = []
     i = 0
     while i < len(full_text):
@@ -430,21 +440,21 @@ for i, seg in enumerate(segments_raw):
         continue
 
     article_match = re.match(r'Điều\s+(\d+[a-z]?)[\.\s]', text)
-    article_num = article_match.group(1) if article_match else str(i + 1)
+    article_num   = article_match.group(1) if article_match else str(i + 1)
 
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     title = lines[0][:120] if lines else f"Điều {article_num}"
 
     docs.append(Document(
-        page_content=text,  # full text, no limit
+        page_content=text,          # full text, no limit
         metadata={
-            "so_ky_hieu": "59/2020/QH14",
-            "loai_van_ban": "Luật",
-            "title": title,
+            "so_ky_hieu":     "59/2020/QH14",
+            "loai_van_ban":   "Luật",
+            "title":          title,
             "article_number": article_num,
             "nguon_thu_thap": "Luật Doanh nghiệp 2020",
-            "char_count": len(text),
-            "segment_index": i,
+            "char_count":     len(text),
+            "segment_index":  i,
         }
     ))
 
