@@ -1,1 +1,1 @@
-GPU=cpu 
+DEVICE=cuda

@@ -23,21 +23,21 @@ IF %ERRORLEVEL% == 0 (
         echo Installing PyTorch CUDA 11.8...
         pip uninstall torch torchvision -y
         pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-        echo GPU=cuda > .device_config
+        echo DEVICE=cuda> .device_config
     ) ELSE IF "%CUDA_CHOICE%"=="2" (
         echo Installing PyTorch CUDA 12.1...
         pip uninstall torch torchvision -y
         pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-        echo GPU=cuda > .device_config
+        echo DEVICE=cuda> .device_config
     ) ELSE (
         echo Installing CPU-only PyTorch...
         pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-        echo GPU=cpu > .device_config
+        echo DEVICE=cpu> .device_config
     )
 ) ELSE (
     echo [NO GPU DETECTED] Installing CPU-only PyTorch ^(~200MB^)...
     pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-    echo GPU=cpu > .device_config
+    echo DEVICE=cpu> .device_config
 )
 
 echo.

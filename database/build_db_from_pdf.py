@@ -44,16 +44,25 @@ def detect_device():
     # Check .device_config written by install.bat
     if os.path.exists(DEVICE_CFG):
         with open(DEVICE_CFG, "r") as f:
-            content = f.read().strip()
-        if "cuda" in content:
-            if torch.cuda.is_available():
-                gpu_name = torch.cuda.get_device_name(0)
-                print(f"  GPU detected: {gpu_name}")
-                return "cuda"
-            else:
-                print("  Warning: .device_config says cuda but no GPU found → using cpu")
-                return "cpu"
-    # Fallback: auto-detect
+            cfg_content = f.read().strip()
+        # Parse DEVICE=xxx
+        for line in cfg_content.splitlines():
+            if line.startswith("DEVICE="):
+                value = line.split("=", 1)[1].strip().lower()
+                if value == "cuda":
+                    import torch
+                    if torch.cuda.is_available():
+                        gpu_name = torch.cuda.get_device_name(0)
+                        print(f"  GPU detected: {gpu_name}")
+                        return "cuda"
+                    else:
+                        print("  Warning: .device_config says cuda but no GPU found → using cpu")
+                        return "cpu"
+                else:
+                    print("  Device config: cpu")
+                    return "cpu"
+    # Fallback: auto-detect via torch
+    import torch
     if torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
         print(f"  GPU auto-detected: {gpu_name}")
@@ -90,7 +99,6 @@ print(f"VietOCR loaded! (device={DEVICE.upper()}, beamsearch=True)\n")
 # 1. Convert to grayscale
 # 2. Boost contrast  → makes text darker, background whiter
 # 3. Boost sharpness → clearer character edges
-# This significantly improves accuracy on scanned documents
 # =========================
 def preprocess_image(pil_image):
     # Convert to grayscale
@@ -114,17 +122,19 @@ def preprocess_image(pil_image):
 # =========================
 def detect_lines_opencv(pil_image):
     """
-    Use OpenCV morphological operations to find text paragraph bounding boxes.
+    Two-stage line detection tuned for Luật Doanh nghiệp 2020:
 
-    Tuned for Luật Doanh nghiệp 2020 PDF layout:
-    - Single column, A4 page
-    - ~300 DPI scan → image ~2488 x 3492px at 300dpi
-    - Line gap ~33px, text line height ~50-60px
-    - Paragraphs span 1-4 lines
-    - Kernel (60, 3) with 3 iterations groups paragraph lines together
-      while keeping separate paragraphs distinct
+    Stage 1 — Single-line detection (kernel 80x1, iter=1):
+      Finds individual text lines using tight horizontal dilation.
+      Each line ~75-80px tall at 300 DPI, gap ~33px between lines.
+      VietOCR is designed for single-line input — this gives best accuracy.
 
-    Returns list of (y1, y2) row ranges sorted top-to-bottom.
+    Stage 2 — Tall box splitting:
+      If a detected box is taller than MAX_LINE_HEIGHT, it means
+      multiple lines merged. We split it by re-running line detection
+      only within that region, preventing garbled multi-line OCR.
+
+    Returns list of (y1, y2) row ranges sorted top to bottom.
     """
     try:
 
@@ -139,39 +149,83 @@ def detect_lines_opencv(pil_image):
             cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
         )
 
-        # Kernel tuned for this PDF:
-        # width=60px → connects characters and words within same line
-        # height=3px → slightly merges adjacent text rows in same paragraph
-        #              but keeps paragraphs separated (gap ~33px >> 3px)
-        # iterations=3 → stronger connection within each paragraph block
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (60, 3))
-        dilated = cv2.dilate(binary, kernel, iterations=3)
+        # Stage 1: tight kernel → individual lines
+        # width=80px connects chars/words in same line
+        # height=1px keeps adjacent lines separate (gap ~33px >> 1px)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (80, 1))
+        dilated = cv2.dilate(binary, kernel, iterations=1)
 
         contours, _ = cv2.findContours(
             dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
 
-        boxes = []
+        # Max height for a single line at 300 DPI
+        # avg=60px, max measured=92px → use 110px as ceiling
+        MAX_LINE_H = 110
+
+        # ── Page boundary filters ──────────────────────────────────
+        # Measured from actual PDF pages (300 DPI, 2488x3492px):
+        # - Binding artifacts (dots, smudges) always appear above y=300
+        # - Real text always starts at y=300-320
+        # - Left binding margin: x < 150px
+        # - Right margin smudges: x+w > 2350px
+        # - Real text lines are always wider than 150px
+        # ───────────────────────────────────────────────────────────
+        TOP_MARGIN   = 320   # skip page number + all binding artifacts
+        LEFT_MARGIN  = 150   # skip left binding area
+        RIGHT_EDGE   = img_w - 150  # skip right margin
+        MIN_WIDTH    = 150   # real text is always wider than this
+
+        raw_boxes = []
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
-            # Filter out:
-            # - tiny noise (h<15, w<50)
-            # - page numbers and small decorations
-            if h >= 15 and w >= 50:
-                # Add vertical padding for Vietnamese diacritics (ắ, ề, ộ)
-                y1 = max(0, y - 4)
-                y2 = min(img_h, y + h + 4)
-                # Use full page width for cropping
-                # (avoids cutting off indented first lines)
-                boxes.append((y1, y2))
+            if (h >= 10 and
+                w >= MIN_WIDTH and
+                x >= LEFT_MARGIN and
+                (x + w) <= RIGHT_EDGE and
+                y >= TOP_MARGIN):
+                raw_boxes.append((y, y + h))
 
-        # Sort top to bottom
-        boxes.sort(key=lambda b: b[0])
-        return boxes
+        raw_boxes.sort(key=lambda b: b[0])
+
+        # Stage 2: split any box taller than MAX_LINE_H
+        final_boxes = []
+        for y1, y2 in raw_boxes:
+            box_h = y2 - y1
+            if box_h <= MAX_LINE_H:
+                # Normal single line — add padding for diacritics
+                final_boxes.append((
+                    max(0, y1 - 4),
+                    min(img_h, y2 + 4)
+                ))
+            else:
+                # Tall box — re-detect lines within this region
+                region = binary[y1:y2, :]
+                sub_dilated = cv2.dilate(region, kernel, iterations=1)
+                sub_cnts, _ = cv2.findContours(
+                    sub_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                sub_boxes = []
+                for sc in sub_cnts:
+                    sx, sy, sw, sh = cv2.boundingRect(sc)
+                    if sh >= 10 and sw >= 80:
+                        sub_boxes.append((y1 + sy, y1 + sy + sh))
+                if sub_boxes:
+                    sub_boxes.sort(key=lambda b: b[0])
+                    for sy1, sy2 in sub_boxes:
+                        final_boxes.append((
+                            max(0, sy1 - 4),
+                            min(img_h, sy2 + 4)
+                        ))
+                else:
+                    # Fallback: keep original box
+                    final_boxes.append((max(0, y1-4), min(img_h, y2+4)))
+
+        final_boxes.sort(key=lambda b: b[0])
+        return final_boxes
 
     except ImportError:
         return None
-
 
 def detect_lines_projection(pil_image):
     """
@@ -201,7 +255,6 @@ def detect_lines_projection(pil_image):
 
     return list(zip(line_starts, line_ends))
 
-
 # =========================
 # STEP 4: OCR FUNCTION
 # =========================
@@ -214,8 +267,8 @@ def ocr_page(pil_image):
     """
     # Preprocess for better accuracy
     pil_image = preprocess_image(pil_image)
-    width = pil_image.width
-    height = pil_image.height
+    width     = pil_image.width
+    height    = pil_image.height
 
     # Try OpenCV line detection first (more accurate)
     boxes = detect_lines_opencv(pil_image)
@@ -238,12 +291,52 @@ def ocr_page(pil_image):
         line_img = pil_image.crop((0, y1, width, y2))
         try:
             text = detector.predict(line_img)
-            if text and text.strip():
-                lines_text.append(text.strip())
+            if text:
+                text = text.strip()
+                if is_valid_line(text):
+                    lines_text.append(text)
         except Exception:
             pass
 
     return "\n".join(lines_text)
+
+
+def is_valid_line(text: str) -> bool:
+    """
+    Filter out OCR garbage caused by scanning artifacts (binding dots,
+    smudges, page creases). These produce lines like:
+      Cons, COLIns, MIRComphis  → no Vietnamese vowel
+      038000001, 0000000000     → mostly digits
+      Đượng ở ..... ... . ...  → text + long whitespace + dots
+    3 rules applied:
+      1. Less than 30% real letters → garbage
+      2. Short (1-2 words) with no Vietnamese vowel → binding smudge
+      3. Text + 5+ spaces + dots/commas → garbled line detection
+    """
+    if not text or len(text) < 3:
+        return False
+
+    import unicodedata, re
+
+    letter_count = sum(1 for c in text if unicodedata.category(c).startswith('L'))
+    total = len(text)
+
+    # Rule 1: mostly digits/symbols → number garbage
+    if letter_count / total < 0.3:
+        return False
+
+    # Rule 2: short line with no Vietnamese vowel → binding smudge
+    words = text.split()
+    if len(words) <= 2:
+        vowels = set('aăâeêiouôơưAĂÂEÊIOUÔƠƯáàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵÁÀẢÃẠẮẰẲẴẶẤẦẨẪẬÉÈẺẼẸẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌỐỒỔỖỘỚỜỞỠỢÚÙỦŨỤỨỪỬỮỰÝỲỶỸỴ')
+        if not any(c in vowels for c in text):
+            return False
+
+    # Rule 3: text + long whitespace + dots → garbled multi-line OCR
+    if re.search(r'\s{5,}[.\s,]{5,}', text):
+        return False
+
+    return True
 
 # =========================
 # STEP 4: OCR ALL PAGES
