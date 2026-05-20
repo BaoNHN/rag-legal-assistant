@@ -127,9 +127,16 @@ print(f"  metadata fields: {list(meta_ds[0].keys())}")
 # =========================
 # 2. FILTER + BUILD DOCS
 # =========================
+# Documents with these so_ky_hieu are managed by build_db_from_txt.py
+# (full OCR text from PDF) — skip them here to avoid overwriting with
+# the incomplete HuggingFace metadata-only version
+PDF_MANAGED = {
+    "59/2020/QH14",   # Luật Doanh nghiệp 2020 — managed by build_db_from_txt.py
+}
+
 print("Filtering...")
 docs = []
-n_business = n_expired = 0
+n_business = n_expired = n_pdf_managed = 0
 
 for row in meta_ds:
     if len(docs) >= MAX_DOCS:
@@ -143,6 +150,12 @@ for row in meta_ds:
         n_expired += 1
         continue
 
+    # Skip docs managed by build_db_from_txt.py (have full OCR text)
+    ky_hieu = (row.get("so_ky_hieu") or "").strip()
+    if ky_hieu in PDF_MANAGED:
+        n_pdf_managed += 1
+        continue
+
     text = build_text(row)
     if len(text) < 30:
         continue
@@ -152,7 +165,7 @@ for row in meta_ds:
         metadata={
             "id":                int(row.get("id") or 0),
             "title":             row.get("title", "") or "",
-            "so_ky_hieu":        (row.get("so_ky_hieu") or "").strip(),
+            "so_ky_hieu":        ky_hieu,
             "loai_van_ban":      row.get("loai_van_ban", "") or "",
             "nganh":             row.get("nganh", "") or "",
             "linh_vuc":          row.get("linh_vuc", "") or "",
@@ -163,28 +176,57 @@ for row in meta_ds:
         },
     ))
 
-print(f"  business rows scanned: {n_business}")
-print(f"  expired rows skipped:  {n_expired}")
-print(f"  kept documents:        {len(docs)}")
+print(f"  business rows scanned : {n_business}")
+print(f"  expired rows skipped  : {n_expired}")
+print(f"  PDF-managed skipped   : {n_pdf_managed} (has full OCR text)")
+print(f"  kept documents        : {len(docs)}")
 
 
 # =========================
 # 3. EMBED + WRITE CHROMA
+# ─────────────────────────
+# Never deletes existing DB.
+# Uses so_ky_hieu as unique key to skip duplicates.
+# Safe to run multiple times.
 # =========================
 print("Loading embedding model...")
 embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-DB_PATH = os.path.join(BASE_DIR, "chroma_db")
-print(f"Building Chroma DB at {DB_PATH} ...")
+DB_PATH  = os.path.join(BASE_DIR, "chroma_db")
+print(f"ChromaDB path: {DB_PATH}")
 
-vs = None
-for i in range(0, len(docs), INSERT_BATCH):
-    chunk = docs[i:i + INSERT_BATCH]
-    if vs is None:
-        vs = Chroma.from_documents(chunk, embedding, persist_directory=DB_PATH)
-    else:
+# Load existing DB or create new one
+vs = Chroma(persist_directory=DB_PATH, embedding_function=embedding)
+
+# Get all so_ky_hieu already in DB
+print("Checking existing documents in ChromaDB...")
+existing      = vs.get(include=["metadatas"])
+existing_ids  = set()
+for meta in existing["metadatas"]:
+    ky_hieu = meta.get("so_ky_hieu", "").strip()
+    if ky_hieu:
+        existing_ids.add(ky_hieu)
+
+print(f"  Already in DB  : {len(existing_ids)} unique so_ky_hieu")
+
+# Filter out docs already in DB
+new_docs = [
+    d for d in docs
+    if d.metadata.get("so_ky_hieu", "").strip() not in existing_ids
+]
+skipped = len(docs) - len(new_docs)
+print(f"  Skipping       : {skipped} duplicates")
+print(f"  New to insert  : {len(new_docs)} documents")
+
+if not new_docs:
+    print("\nNothing new to add — DB is already up to date!")
+else:
+    print(f"\nInserting {len(new_docs)} new documents...")
+    for i in range(0, len(new_docs), INSERT_BATCH):
+        chunk = new_docs[i:i + INSERT_BATCH]
         vs.add_documents(chunk)
-    print(f"  indexed {min(i + INSERT_BATCH, len(docs))}/{len(docs)}")
+        print(f"  indexed {min(i + INSERT_BATCH, len(new_docs))}/{len(new_docs)}")
+    print(f"\nDONE: {len(new_docs)} new documents added.")
 
-print("DONE: metadata-only DB ready!")
+print(f"Total documents in DB: {vs._collection.count()}")
