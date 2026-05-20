@@ -9,3 +9,8 @@ python database/build_db.py
 // chạy chương trình
 python app.py
 
+# Sau khi python app.py đang chạy, mở terminal mới:
+pip install ngrok
+
+python start_ngrok.py
+# Copy URL ra là có link public ngay!
