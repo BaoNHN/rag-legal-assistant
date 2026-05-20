@@ -1,5 +1,5 @@
 python -m venv rag_env //Tạo env mới
-rag_env\Scripts\activate  //     activate  env mới
+ conda activate rag_env (rag_env\Scripts\activate  )//     activate  env mới
 conda deactivate // deactivate base env
 pip install -r requirements.txt // install lần đầu
 pip install --no-cache-dir -r requirements.txt //nếu requirement thay đổi
