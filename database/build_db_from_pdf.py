@@ -10,21 +10,14 @@
 import os
 import re
 import shutil
-import warnings
+import numpy as np
+import cv2
+import torch
 
-# ── Suppress the batch_first / nested_tensor warning from PyTorch ──
-warnings.filterwarnings(
-    "ignore",
-    message=".*enable_nested_tensor.*",
-    category=UserWarning
-)
-warnings.filterwarnings(
-    "ignore",
-    message=".*batch_first.*",
-    category=UserWarning
-)
-
-from PIL import Image, ImageEnhance, ImageFilter
+from pypdf import PdfReader
+from vietocr.tool.predictor import Predictor
+from vietocr.tool.config import Cfg
+from PIL import ImageEnhance
 from pdf2image import convert_from_path
 from langchain.schema import Document
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -33,16 +26,16 @@ from langchain_chroma import Chroma
 # =========================
 # CONFIG
 # =========================
-BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PDF_PATH     = os.path.join(BASE_DIR, "luat-doanh-nghiep-2020_20_281_29.pdf")
-DB_PATH      = os.path.join(BASE_DIR, "chroma_db")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PDF_PATH = os.path.join(BASE_DIR, "luat-doanh-nghiep-2020_20_281_29.pdf")
+DB_PATH = os.path.join(BASE_DIR, "chroma_db")
 POPPLER_PATH = os.path.join(BASE_DIR, "poppler", "Library", "bin")
 RAW_TXT_PATH = os.path.join(BASE_DIR, "ocr_raw_output.txt")
-DEVICE_CFG   = os.path.join(BASE_DIR, ".device_config")
+DEVICE_CFG = os.path.join(BASE_DIR, ".device_config")
 
-DPI          = 250   # increased from 200 → better OCR accuracy
-BATCH_SIZE   = 5     # pages per batch (reduce to 2 if RAM < 8GB)
-INSERT_BATCH = 32    # chromadb insert batch
+DPI = 250  # increased from 200 → better OCR accuracy
+BATCH_SIZE = 5  # pages per batch (reduce to 2 if RAM < 8GB)
+INSERT_BATCH = 32  # chromadb insert batch
 
 # ── Auto-detect GPU from install.bat config ──
 # Reads .device_config written by install.bat
@@ -53,7 +46,6 @@ def detect_device():
         with open(DEVICE_CFG, "r") as f:
             content = f.read().strip()
         if "cuda" in content:
-            import torch
             if torch.cuda.is_available():
                 gpu_name = torch.cuda.get_device_name(0)
                 print(f"  GPU detected: {gpu_name}")
@@ -62,7 +54,6 @@ def detect_device():
                 print("  Warning: .device_config says cuda but no GPU found → using cpu")
                 return "cpu"
     # Fallback: auto-detect
-    import torch
     if torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
         print(f"  GPU auto-detected: {gpu_name}")
@@ -79,9 +70,6 @@ print("Detecting device...")
 DEVICE = detect_device()
 print(f"  Using device: {DEVICE.upper()}")
 print()
-
-from vietocr.tool.predictor import Predictor
-from vietocr.tool.config import Cfg
 
 config = Cfg.load_config_from_name('vgg_transformer')
 config['device'] = DEVICE
@@ -116,29 +104,87 @@ def preprocess_image(pil_image):
     return img
 
 # =========================
-# STEP 3: OCR FUNCTION
+# STEP 3: LINE DETECTION
+# ─────────────────────────────
+# Uses OpenCV to detect text line bounding boxes.
+# Much more accurate than manual pixel projection because:
+# - Handles indented text, numbered lists, italic lines
+# - Merges characters into proper word/line groups
+# - Skips decorative elements and noise automatically
 # =========================
-def ocr_page(pil_image):
+def detect_lines_opencv(pil_image):
     """
-    Preprocess page image, split into text lines,
-    OCR each line with VietOCR, join results.
+    Use OpenCV morphological operations to find text paragraph bounding boxes.
+
+    Tuned for Luật Doanh nghiệp 2020 PDF layout:
+    - Single column, A4 page
+    - ~300 DPI scan → image ~2488 x 3492px at 300dpi
+    - Line gap ~33px, text line height ~50-60px
+    - Paragraphs span 1-4 lines
+    - Kernel (60, 3) with 3 iterations groups paragraph lines together
+      while keeping separate paragraphs distinct
+
+    Returns list of (y1, y2) row ranges sorted top-to-bottom.
     """
-    import numpy as np
+    try:
 
-    # Preprocess for better accuracy
-    pil_image = preprocess_image(pil_image)
+        img_array = np.array(pil_image.convert('RGB'))
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        img_h, img_w = gray.shape
 
-    # Work on grayscale for line detection
+        # Otsu binarization — works well for scanned legal docs
+        # Inverts so text = white (255), background = black (0)
+        _, binary = cv2.threshold(
+            gray, 0, 255,
+            cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )
+
+        # Kernel tuned for this PDF:
+        # width=60px → connects characters and words within same line
+        # height=3px → slightly merges adjacent text rows in same paragraph
+        #              but keeps paragraphs separated (gap ~33px >> 3px)
+        # iterations=3 → stronger connection within each paragraph block
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (60, 3))
+        dilated = cv2.dilate(binary, kernel, iterations=3)
+
+        contours, _ = cv2.findContours(
+            dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        boxes = []
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            # Filter out:
+            # - tiny noise (h<15, w<50)
+            # - page numbers and small decorations
+            if h >= 15 and w >= 50:
+                # Add vertical padding for Vietnamese diacritics (ắ, ề, ộ)
+                y1 = max(0, y - 4)
+                y2 = min(img_h, y + h + 4)
+                # Use full page width for cropping
+                # (avoids cutting off indented first lines)
+                boxes.append((y1, y2))
+
+        # Sort top to bottom
+        boxes.sort(key=lambda b: b[0])
+        return boxes
+
+    except ImportError:
+        return None
+
+
+def detect_lines_projection(pil_image):
+    """
+    Fallback: horizontal pixel projection line detection.
+    Less accurate than OpenCV but has no extra dependencies.
+    """
     gray = pil_image.convert('L')
-    arr  = np.array(gray)
-
-    # Find rows with text (dark pixels on white background)
-    # threshold 200 = anything darker than light gray counts as text
+    arr = np.array(gray)
     row_darkness = (arr < 200).sum(axis=1)
 
-    in_line     = False
+    in_line = False
     line_starts = []
-    line_ends   = []
+    line_ends = []
 
     for i, dark in enumerate(row_darkness):
         if dark > 5 and not in_line:
@@ -153,20 +199,43 @@ def ocr_page(pil_image):
     if in_line:
         line_ends.append(arr.shape[0])
 
+    return list(zip(line_starts, line_ends))
+
+
+# =========================
+# STEP 4: OCR FUNCTION
+# =========================
+def ocr_page(pil_image):
+    """
+    1. Preprocess image (contrast + sharpness boost)
+    2. Detect text line bounding boxes (OpenCV preferred, projection fallback)
+    3. OCR each line with VietOCR
+    4. Join lines into full page text
+    """
+    # Preprocess for better accuracy
+    pil_image = preprocess_image(pil_image)
+    width = pil_image.width
+    height = pil_image.height
+
+    # Try OpenCV line detection first (more accurate)
+    boxes = detect_lines_opencv(pil_image)
+
+    if not boxes:
+        # Fallback to pixel projection
+        boxes = detect_lines_projection(pil_image)
+
     # No lines detected → process whole page at once
-    if not line_starts:
+    if not boxes:
         return detector.predict(pil_image)
 
-    width      = pil_image.width
     lines_text = []
-
-    for start, end in zip(line_starts, line_ends):
-        height = end - start
-        # Skip tiny fragments (noise, decorations)
-        # min 15px — Vietnamese diacritics need height
-        if height < 15:
+    for y1, y2 in boxes:
+        line_height = y2 - y1
+        # Skip tiny fragments
+        if line_height < 10:
             continue
-        line_img = pil_image.crop((0, start, width, end))
+        # Crop full width of the line
+        line_img = pil_image.crop((0, y1, width, y2))
         try:
             text = detector.predict(line_img)
             if text and text.strip():
@@ -179,7 +248,6 @@ def ocr_page(pil_image):
 # =========================
 # STEP 4: OCR ALL PAGES
 # =========================
-from pypdf import PdfReader
 total_pages = len(PdfReader(PDF_PATH).pages)
 
 est = "~15 min" if DEVICE == "cuda" else "~2 hours"
@@ -239,7 +307,7 @@ full_text = re.sub(r'\n{3,}', '\n\n', full_text)
 full_text = re.sub(r'[ \t]+', ' ', full_text).strip()
 
 # Split on "Điều X." — lookahead keeps delimiter at start of each segment
-pattern    = r'(?=Điều\s+\d+[a-z]?[\.\s])'
+pattern = r'(?=Điều\s+\d+[a-z]?[\.\s])'
 raw_splits = re.split(pattern, full_text)
 
 segments_raw = [s.strip() for s in raw_splits if len(s.strip()) > 50]
@@ -248,8 +316,8 @@ print(f"Found {len(segments_raw)} legal article segments.")
 # Fallback: fixed-size chunks if article detection fails
 if len(segments_raw) < 10:
     print("Warning: few articles detected — using fixed-size chunking as fallback.")
-    chunk_size   = 3000
-    overlap      = 300
+    chunk_size = 3000
+    overlap = 300
     segments_raw = []
     i = 0
     while i < len(full_text):
@@ -269,21 +337,21 @@ for i, seg in enumerate(segments_raw):
         continue
 
     article_match = re.match(r'Điều\s+(\d+[a-z]?)[\.\s]', text)
-    article_num   = article_match.group(1) if article_match else str(i + 1)
+    article_num = article_match.group(1) if article_match else str(i + 1)
 
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     title = lines[0][:120] if lines else f"Điều {article_num}"
 
     docs.append(Document(
-        page_content=text,          # full text, no limit
+        page_content=text,  # full text, no limit
         metadata={
-            "so_ky_hieu":     "59/2020/QH14",
-            "loai_van_ban":   "Luật",
-            "title":          title,
+            "so_ky_hieu": "59/2020/QH14",
+            "loai_van_ban": "Luật",
+            "title": title,
             "article_number": article_num,
             "nguon_thu_thap": "Luật Doanh nghiệp 2020",
-            "char_count":     len(text),
-            "segment_index":  i,
+            "char_count": len(text),
+            "segment_index": i,
         }
     ))
 
