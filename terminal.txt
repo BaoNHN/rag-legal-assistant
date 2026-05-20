@@ -3,7 +3,7 @@ python -m venv rag_env //Tạo env mới
 conda deactivate // deactivate base env
 pip install -r requirements.txt // install lần đầu
 pip install --no-cache-dir -r requirements.txt //nếu requirement thay đổi
-.\install.bat //để cài torch cho build_db_from_pdf nếu không dùng thì khỏi cài do lên khoảng 2gb
+.\install.bat //để cài torch cho build_db_from_pdf nếu không dung ocr thì khỏi cài do lên khoảng 2gb
 
 //build thư viện chromadb để tải thông tin hugging face
 python database/build_db.py// cho hugging face
