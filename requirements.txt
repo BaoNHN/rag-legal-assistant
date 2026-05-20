@@ -16,7 +16,6 @@ langchain-groq==0.1.9
 
 # Vector DB
 chromadb==0.4.24
-
 posthog==3.5.0
 
 # Embedding
@@ -33,3 +32,7 @@ tiktoken==0.7.0
 
 # datasets
 datasets==2.19.1
+
+# OCR
+vietocr==0.3.13
+pdf2image==1.17.0
