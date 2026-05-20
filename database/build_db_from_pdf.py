@@ -1,6 +1,6 @@
 # build_db_from_pdf.py  —  VietOCR version
 # SETUP:
-#   Download poppler → put in project_root/poppler/Library/bin/
+#   Download poppler current version is 25.12.0→ put in project_root/poppler/Library/bin/
 #
 # USAGE:
 #   conda activate rag_env
