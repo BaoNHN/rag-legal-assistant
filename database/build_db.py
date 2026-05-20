@@ -127,11 +127,11 @@ print(f"  metadata fields: {list(meta_ds[0].keys())}")
 # =========================
 # 2. FILTER + BUILD DOCS
 # =========================
-# Documents with these so_ky_hieu are managed by build_db_from_txt.py
+# Documents with these so_ky_hieu are managed by build_db_from_pdf.py
 # (full OCR text from PDF) — skip them here to avoid overwriting with
 # the incomplete HuggingFace metadata-only version
 PDF_MANAGED = {
-    "59/2020/QH14",   # Luật Doanh nghiệp 2020 — managed by build_db_from_txt.py
+    "59/2020/QH14",   # Luật Doanh nghiệp 2020 — managed by build_db_from_pdf.py
 }
 
 print("Filtering...")
