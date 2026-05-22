@@ -286,7 +286,7 @@ def run_import(job_id: str, pdf_path: str, so_ky_hieu: str,
         _set_job(job_id, status="done", message=result_msg)
 
     except Exception as e:
-        _set_job(job_id, status="failed", message=f"❌ Lỗi: Xin lỗi chúng tôi gặp vấn đề.")
+        _set_job(job_id, status="failed", message=f"❌ Lỗi hệ thống.")
 
     finally:
         # ── 7. Create/update 'Import new law' chat ──
