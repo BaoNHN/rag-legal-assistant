@@ -5,10 +5,17 @@ pip install -r requirements.txt // install lần đầu
 pip install --no-cache-dir -r requirements.txt //nếu requirement thay đổi
 .\install.bat //để cài torch cho build_db_from_pdf nếu không dung ocr thì khỏi cài do lên khoảng 2gb
 
-//build thư viện chromadb để tải thông tin hugging face
-python database/build_db.py// cho hugging face
+//build thư viện chromadb 
+python database/build_db.py// để tải thông tin hugging face và xử lý 
 python database/build_db_from_pdf.py // cho luat-doanh-nghiep-2020_20_281_29.pdf 
 python database/build_db_from_txt.py // cho ocr_raw_output tạo ra sau khi chạy build_db_from_pdf
+//Build ChromaDB from curated dataset (fast, no OCR needed!)
+python database/build_db_from_dataset.py
+
+# 2. Quick evaluation on 30 demo questions for curated dataset
+python evaluate/evaluate_rag.py --mode auto --split demo
+# 3. Full evaluation with LLM scoring for curated dataset
+python evaluate/evaluate_rag.py --mode llm --split test
 
 // chạy chương trình
 python app.py

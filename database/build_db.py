@@ -127,11 +127,17 @@ print(f"  metadata fields: {list(meta_ds[0].keys())}")
 # =========================
 # 2. FILTER + BUILD DOCS
 # =========================
-# Documents with these so_ky_hieu are managed by build_db_from_pdf.py
-# (full OCR text from PDF) — skip them here to avoid overwriting with
-# the incomplete HuggingFace metadata-only version
+# Documents with these so_ky_hieu are managed by dedicated scripts.
+# Skip here to avoid overwriting with incomplete HuggingFace metadata.
+#
+# Priority order (run in this sequence):
+#   1. build_db_from_dataset.py  → 59/2020/QH14 curated KB + Q&A
+#   2. build_db_from_txt.py      → 59/2020/QH14 full OCR (overwrites #1 if run)
+#   3. build_db.py (this file)   → all other laws from HuggingFace
+#
+# To add more PDFs managed locally, add their so_ky_hieu here:
 PDF_MANAGED = {
-    "59/2020/QH14",   # Luật Doanh nghiệp 2020 — managed by build_db_from_pdf.py
+    "59/2020/QH14",   # Luật Doanh nghiệp 2020 — managed by build_db_from_dataset.py / build_db_from_txt.py
 }
 
 print("Filtering...")
@@ -192,30 +198,39 @@ print(f"  kept documents        : {len(docs)}")
 print("Loading embedding model...")
 embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # database/ → root
 DB_PATH  = os.path.join(BASE_DIR, "chroma_db")
 print(f"ChromaDB path: {DB_PATH}")
 
 # Load existing DB or create new one
 vs = Chroma(persist_directory=DB_PATH, embedding_function=embedding)
 
-# Get all so_ky_hieu already in DB
+# Build a composite key (so_ky_hieu + title) to detect duplicates.
+# More precise than so_ky_hieu alone — allows partial re-imports
+# without skipping documents that weren't indexed yet.
 print("Checking existing documents in ChromaDB...")
-existing      = vs.get(include=["metadatas"])
-existing_ids  = set()
+existing     = vs.get(include=["metadatas"])
+existing_keys = set()
 for meta in existing["metadatas"]:
     ky_hieu = meta.get("so_ky_hieu", "").strip()
+    title   = meta.get("title", "").strip()
     if ky_hieu:
-        existing_ids.add(ky_hieu)
+        existing_keys.add(f"{ky_hieu}::{title}")
 
-print(f"  Already in DB  : {len(existing_ids)} unique so_ky_hieu")
+print(f"  Already in DB  : {len(existing_keys)} unique documents")
 
-# Filter out docs already in DB
-new_docs = [
-    d for d in docs
-    if d.metadata.get("so_ky_hieu", "").strip() not in existing_ids
-]
-skipped = len(docs) - len(new_docs)
+# Filter out docs already in DB using composite key
+new_docs = []
+skipped  = 0
+for d in docs:
+    ky_hieu = d.metadata.get("so_ky_hieu", "").strip()
+    title   = d.metadata.get("title", "").strip()
+    key     = f"{ky_hieu}::{title}"
+    if key in existing_keys:
+        skipped += 1
+    else:
+        new_docs.append(d)
+
 print(f"  Skipping       : {skipped} duplicates")
 print(f"  New to insert  : {len(new_docs)} documents")
 

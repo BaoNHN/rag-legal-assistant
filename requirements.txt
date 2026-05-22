@@ -33,6 +33,11 @@ tiktoken==0.7.0
 # datasets
 datasets==2.19.1
 
+# Excel support (for build_db_from_dataset.py and evaluate_rag.py)
+openpyxl==3.1.5
+
 # OCR
 vietocr==0.3.13
 pdf2image==1.17.0
+# opencv for accurate text line detection (headless = no GUI needed)
+opencv-python-headless==4.11.0.86

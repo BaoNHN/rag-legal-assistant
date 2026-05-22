@@ -8,7 +8,7 @@
 #   python database/build_db_from_pdf.py
 
 import os
-import re
+import unicodedata, re
 import shutil
 import numpy as np
 import cv2
@@ -325,8 +325,6 @@ def is_valid_line(text: str) -> bool:
     """
     if not text or len(text) < 3:
         return False
-
-    import unicodedata, re
 
     letter_count = sum(1 for c in text if unicodedata.category(c).startswith('L'))
     total = len(text)
