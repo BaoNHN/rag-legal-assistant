@@ -4,12 +4,43 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 from langchain.schema import Document
+from difflib import SequenceMatcher
+from collections import Counter
 
 # =========================
 # CONFIG
 # =========================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH  = os.path.join(BASE_DIR, "chroma_db")
+
+STOPWORDS = {
+    "theo", "là", "gì", "về", "của", "và",
+    "trong", "được", "cho", "có", "khi"
+}
+PROCEDURE_PATTERNS = [
+    "trình tự",
+    "thủ tục",
+    "quy trình",
+    "các bước",
+    "hồ sơ",
+    "nộp ở đâu",
+]
+
+
+CONDITION_PATTERNS = [
+    "điều kiện",
+    "yêu cầu",
+    "cần có",
+    "phải có",
+]
+
+
+DEFINITION_PATTERNS = [
+    "là gì",
+    "khái niệm",
+    "định nghĩa",
+    "quy định về",
+]
 
 with open(os.path.join(BASE_DIR, "groqkey.txt"), "r") as f:
     GROQ_API_KEY = f.read().strip()
@@ -48,6 +79,13 @@ def clean_answer(text: str) -> str:
             seen.add(l)
     return "\n".join(cleaned).strip()
 
+def similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+def tokenize(text: str):
+    text = text.lower()
+    text = re.sub(r'[^\w\s]', ' ', text)
+    return [w for w in text.split() if len(w) > 1]
 # =========================
 # QUERY REWRITE
 # =========================
@@ -97,44 +135,49 @@ def extract_topic_from_question(question: str) -> str | None:
 def retrieve_docs(question: str, rewritten_q: str):
     topic = extract_topic_from_question(question)
 
-    if topic:
-        try:
-            results = vectorstore.get(include=["documents", "metadatas"])
+    try:
+        results = vectorstore.get(include=["documents", "metadatas"])
+        all_docs = []
 
-            topic_docs = []
-            for doc_text, meta in zip(results["documents"], results["metadatas"]):
-                kb_topic = meta.get("topic", "").lower()
-                if topic in kb_topic or kb_topic in topic:
-                    topic_docs.append(Document(
-                        page_content=doc_text,
-                        metadata=meta
-                    ))
+        for doc_text, meta in zip(results["documents"], results["metadatas"]):
+            all_docs.append(Document(
+                page_content=doc_text,
+                metadata=meta
+            ))
 
-            if topic_docs:
-                # If multiple docs match (e.g. "Tài sản góp vốn" AND
-                # "Định giá tài sản góp vốn" both match "định giá tài sản góp vốn"),
-                # pick the one whose topic most closely matches the question topic.
-                # Strategy: longest KB topic that is still contained in question topic
-                # wins — it is the most specific match.
-                def topic_score(doc):
-                    kb_t = doc.metadata.get("topic", "").lower()
-                    # Score 1: exact match
-                    if kb_t == topic:
-                        return (2, len(kb_t))
-                    # Score 2: question topic contains KB topic (KB is subset)
-                    if kb_t in topic:
-                        return (1, len(kb_t))
-                    # Score 3: KB topic contains question topic
-                    return (0, len(kb_t))
+        # ===== STRICT TOPIC MATCH =====
+        if topic:
+            scored = []
 
-                topic_docs.sort(key=topic_score, reverse=True)
-                return topic_docs[:5]
+            for d in all_docs:
+                kb_topic = d.metadata.get("topic", "").strip().lower()
 
-        except Exception:
-            pass
+                if not kb_topic:
+                    continue
 
-    # Fallback: standard semantic retrieval
-    return retriever.invoke(rewritten_q)
+                sim = similarity(topic, kb_topic)
+
+                # bonus for exact containment
+                if topic == kb_topic:
+                    sim += 1.0
+                elif topic in kb_topic:
+                    sim += 0.3
+                elif kb_topic in topic:
+                    sim += 0.1
+
+                scored.append((sim, d))
+
+            scored.sort(key=lambda x: x[0], reverse=True)
+
+            # confidence threshold
+            if scored and scored[0][0] >= 0.55:
+                return [d for _, d in scored[:5]]
+
+        # ===== FALLBACK SEMANTIC SEARCH =====
+        return retriever.invoke(rewritten_q)
+
+    except Exception:
+        return retriever.invoke(rewritten_q)
 
 # =========================
 # RERANK
@@ -143,29 +186,45 @@ def retrieve_docs(question: str, rewritten_q: str):
 # + prefers KB_Articles docs over Q&A docs
 # =========================
 def select_best_doc(question: str, docs):
-    best_doc   = None
+    q_words = [w for w in tokenize(question) if w not in STOPWORDS]
+    q_counter = Counter(q_words)
+
+    best_doc = None
     best_score = -1
-    q_words    = set(question.lower().split())
 
     for d in docs:
-        # Score against content
-        text_score = sum(1 for w in q_words if w in d.page_content.lower())
+        score = 0
 
-        # Score against curated keywords (weighted)
-        kw_field = d.metadata.get("retrieval_keywords", "")
-        if kw_field:
-            kw_words  = set(kw_field.lower().replace(";", " ").split())
-            kw_score  = sum(1 for w in q_words if w in kw_words) * 2
-        else:
-            kw_score = 0
+        content = d.page_content.lower()
+        metadata = d.metadata
 
-        # Prefer KB_Articles over Q&A docs
-        source_bonus = 1 if "KB_Articles" in d.metadata.get("nguon_thu_thap", "") else 0
+        # keyword overlap
+        for w, cnt in q_counter.items():
+            if w in content:
+                score += cnt
 
-        total = text_score + kw_score + source_bonus
-        if total > best_score:
-            best_score = total
-            best_doc   = d
+        # metadata keywords
+        kw_field = metadata.get("retrieval_keywords", "")
+        kw_text = kw_field.lower().replace(";", " ")
+
+        for w, cnt in q_counter.items():
+            if w in kw_text:
+                score += cnt * 3
+
+        # article reference bonus
+        article_ref = metadata.get("article_reference", "")
+        if article_ref:
+            art_num = re.findall(r'\d+', article_ref)
+            if art_num and art_num[0] in question:
+                score += 5
+
+        # prioritize KB articles
+        if "KB_Articles" in metadata.get("nguon_thu_thap", ""):
+            score += 2
+
+        if score > best_score:
+            best_score = score
+            best_doc = d
 
     return best_doc
 
@@ -193,17 +252,17 @@ _DOC_TYPE_MAP = {
 }
 
 def classify_question(question: str, best_doc=None) -> str:
-    if best_doc:
-        doc_type = best_doc.metadata.get("doc_type", "")
-        if doc_type and doc_type in _DOC_TYPE_MAP:
-            return _DOC_TYPE_MAP[doc_type]
     q = question.lower()
-    if any(w in q for w in ["bước", "thủ tục", "quy trình", "đăng ký", "cách"]):
+
+    if any(p in q for p in PROCEDURE_PATTERNS):
         return "procedure"
-    if any(w in q for w in ["điều kiện", "yêu cầu", "cần có", "phải có"]):
+
+    if any(p in q for p in CONDITION_PATTERNS):
         return "condition"
-    if any(w in q for w in ["là gì", "định nghĩa", "khái niệm"]):
+
+    if any(p in q for p in DEFINITION_PATTERNS):
         return "definition"
+
     return "general"
 
 # =========================
@@ -271,7 +330,7 @@ def build_citation(meta: dict) -> str:
 # =========================
 # MAIN
 # =========================
-def ask_rag(question: str) -> str:
+def ask_rag(question: str, return_debug: bool = False):
     try:
         question = str(question)
 
@@ -307,8 +366,18 @@ def ask_rag(question: str) -> str:
         answer = clean_answer(answer)
 
         # STEP 9: citation
-        return answer + build_citation(best_doc.metadata)
+        final_answer = answer + build_citation(best_doc.metadata)
 
+        if return_debug:
+            return {
+                "answer": final_answer,
+                "retrieved_context": context,
+                "metadata": best_doc.metadata,
+                "question_type": q_type,
+            }
+
+        return final_answer
+    
     except Exception as e:
         print("RAG ERROR:", e)
         return "❌ Lỗi hệ thống."

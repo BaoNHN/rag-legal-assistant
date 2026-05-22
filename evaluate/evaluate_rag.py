@@ -237,7 +237,9 @@ def run_evaluation(split: str, mode: str, max_questions: int = None):
         # Generate answer via RAG
         t0 = time.time()
         try:
-            generated = ask_rag(question)
+            rag_result = ask_rag(question, return_debug=True)
+            generated = rag_result["answer"]
+            retrieved_context = rag_result["retrieved_context"]
         except Exception as e:
             generated = f"ERROR: {e}"
         elapsed = round(time.time() - t0, 2)
@@ -247,8 +249,14 @@ def run_evaluation(split: str, mode: str, max_questions: int = None):
             scores = llm_score(question, generated, expected, article_ref, groq_key)
         else:
             # For auto mode, use empty retrieved context (not available at this level)
-            scores = auto_score(question, generated, expected,
-                                article_ref, keywords, "")
+            scores = auto_score(
+                question,
+                generated,
+                expected,
+                article_ref,
+                keywords,
+                retrieved_context
+            )
 
         print(f"  Score: {scores['total']:.1f}/100 | "
               f"acc={scores['legal_accuracy']}/3 "
