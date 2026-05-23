@@ -236,10 +236,14 @@ def run_evaluation(split: str, mode: str, max_questions: int = None):
 
         # Generate answer via RAG
         t0 = time.time()
+        retrieved_context = ""   # default — prevents NameError if ask_rag throws
         try:
             rag_result = ask_rag(question, return_debug=True)
-            generated = rag_result["answer"]
-            retrieved_context = rag_result["retrieved_context"]
+            if isinstance(rag_result, dict):
+                generated = rag_result["answer"]
+                retrieved_context = rag_result.get("retrieved_context", "")
+            else:
+                generated = str(rag_result)
         except Exception as e:
             generated = f"ERROR: {e}"
         elapsed = round(time.time() - t0, 2)

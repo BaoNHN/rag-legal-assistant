@@ -11,7 +11,7 @@ from collections import Counter
 # CONFIG
 # =========================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH  = os.path.join(BASE_DIR, "chroma_db")
+DB_PATH = os.path.join(BASE_DIR, "chroma_db")
 
 STOPWORDS = {
     "theo", "là", "gì", "về", "của", "và",
@@ -26,14 +26,12 @@ PROCEDURE_PATTERNS = [
     "nộp ở đâu",
 ]
 
-
 CONDITION_PATTERNS = [
     "điều kiện",
     "yêu cầu",
     "cần có",
     "phải có",
 ]
-
 
 DEFINITION_PATTERNS = [
     "là gì",
@@ -66,6 +64,7 @@ llm = ChatGroq(
     temperature=0
 )
 
+
 # =========================
 # CLEAN TEXT
 # =========================
@@ -79,24 +78,46 @@ def clean_answer(text: str) -> str:
             seen.add(l)
     return "\n".join(cleaned).strip()
 
+
 def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
 
 def tokenize(text: str):
     text = text.lower()
     text = re.sub(r'[^\w\s]', ' ', text)
     return [w for w in text.split() if len(w) > 1]
+
+
 # =========================
 # QUERY REWRITE
 # =========================
+def _llm_invoke_with_retry(prompt: str, retries: int = 3) -> str:
+    """Invoke LLM with retry on rate-limit/timeout errors."""
+    import time
+    for attempt in range(retries + 1):
+        try:
+            return llm.invoke(prompt).content.strip()
+        except Exception as e:
+            err = str(e).lower()
+            if attempt < retries and any(k in err for k in ["rate", "timeout", "429", "503", "connection"]):
+                wait = 5 * (attempt + 1)  # 5s, 10s, 15s
+                print(f"  ⚠ LLM retry {attempt + 1}/{retries} after {wait}s ({err[:40]})")
+                time.sleep(wait)
+                continue
+            raise
+    return ""
+
+
 def rewrite_query(question: str) -> str:
     prompt = f"""Viết lại câu hỏi ngắn gọn, rõ nghĩa để tìm trong luật:
 
 {question}"""
     try:
-        return llm.invoke(prompt).content.strip()
+        return _llm_invoke_with_retry(prompt)
     except Exception:
         return question
+
 
 # =========================
 # EXTRACT TOPIC FROM QUESTION
@@ -123,6 +144,7 @@ def extract_topic_from_question(question: str) -> str | None:
             topic = re.sub(r'\s*(theo luật.*|của luật.*)$', '', topic).strip()
             return topic
     return None
+
 
 # =========================
 # TOPIC-AWARE RETRIEVAL
@@ -179,6 +201,7 @@ def retrieve_docs(question: str, rewritten_q: str):
     except Exception:
         return retriever.invoke(rewritten_q)
 
+
 # =========================
 # RERANK
 # ─────────────────────────
@@ -203,13 +226,21 @@ def select_best_doc(question: str, docs):
             if w in content:
                 score += cnt
 
-        # metadata keywords
+        # metadata keywords — single word match
         kw_field = metadata.get("retrieval_keywords", "")
         kw_text = kw_field.lower().replace(";", " ")
 
         for w, cnt in q_counter.items():
             if w in kw_text:
                 score += cnt * 3
+
+        # Multi-word keyword phrase match (high precision boost)
+        # Matches "công ty hợp danh", "thành viên hợp danh" etc.
+        q_lower = question.lower()
+        for kw_phrase in kw_field.lower().split(";"):
+            kw_phrase = kw_phrase.strip()
+            if len(kw_phrase) > 8 and kw_phrase in q_lower:
+                score += 10  # strong boost for exact phrase match
 
         # article reference bonus
         article_ref = metadata.get("article_reference", "")
@@ -227,6 +258,7 @@ def select_best_doc(question: str, docs):
             best_doc = d
 
     return best_doc
+
 
 # =========================
 # CLASSIFY QUESTION
@@ -251,6 +283,7 @@ _DOC_TYPE_MAP = {
     "dependent_units": "definition",
 }
 
+
 def classify_question(question: str, best_doc=None) -> str:
     q = question.lower()
 
@@ -264,6 +297,7 @@ def classify_question(question: str, best_doc=None) -> str:
         return "definition"
 
     return "general"
+
 
 # =========================
 # BUILD PROMPT
@@ -298,23 +332,39 @@ Câu hỏi: {question}
     elif q_type == "definition":
         base += "Trả lời ngắn gọn định nghĩa, nêu rõ căn cứ điều luật."
     else:
-        base += "Trả lời ngắn gọn, đúng trọng tâm, nêu căn cứ pháp lý."
+        base += "Trả lời ngắn gọn, đúng trọng tâm, nêu CĂN CỨ PHÁP LÝ đầy đủ (tất cả các Điều liên quan)."
     return base
+
 
 # =========================
 # BUILD CITATION
 # =========================
-def build_citation(meta: dict) -> str:
+def build_citation(meta: dict, answer: str = "") -> str:
     article_ref = meta.get("article_reference", "")
-    topic       = meta.get("topic", "")
-    so_ky_hieu  = meta.get("so_ky_hieu", "")
-    loai        = meta.get("loai_van_ban", "")
-    source_url  = meta.get("source_url", "")
+    topic = meta.get("topic", "")
+    so_ky_hieu = meta.get("so_ky_hieu", "")
+    loai = meta.get("loai_van_ban", "")
+    source_url = meta.get("source_url", "")
+
+    # Include any additional articles cited in the answer
+    if answer:
+        cited_nums = re.findall(r'Điều\s+(\d+)', answer)
+        meta_num = re.sub(r'[^\d]', '', article_ref)
+        seen = {article_ref}
+        extra = []
+        for n in cited_nums:
+            ref = f"Điều {n}"
+            if n != meta_num and ref not in seen:
+                extra.append(ref)
+                seen.add(ref)
+        if extra:
+            article_ref = article_ref + "; " + "; ".join(extra)
 
     parts = []
     if article_ref:
         line = article_ref
-        if topic:
+        # Only add topic label for single article citations
+        if topic and ";" not in article_ref:
             line += f" ({topic})"
         parts.append(line)
     law_name = f"{loai} {so_ky_hieu}".strip()
@@ -322,10 +372,11 @@ def build_citation(meta: dict) -> str:
         parts.append(law_name)
 
     citation = " — ".join(parts) if parts else meta.get("nguon_thu_thap", "")
-    result   = f"\n\n📖 Nguồn: {citation}"
+    result = f"\n\n📖 Nguồn: {citation}"
     if source_url and "vbpl.vn" in source_url:
         result += f"\n🔗 {source_url}"
     return result
+
 
 # =========================
 # MAIN
@@ -334,8 +385,12 @@ def ask_rag(question: str, return_debug: bool = False):
     try:
         question = str(question)
 
-        # STEP 1: rewrite
-        better_q = rewrite_query(question)
+        # STEP 1: rewrite — SKIP if topic is extractable
+        # Knowledge questions follow "quy định về X là gì?" pattern.
+        # Topic filter works directly on original question → no LLM rewrite needed.
+        # This saves one Groq API call per knowledge question, reducing rate limit hits.
+        topic = extract_topic_from_question(question)
+        better_q = question if topic else rewrite_query(question)
 
         # STEP 2: topic-aware retrieval (fixes knowledge question accuracy)
         docs = retrieve_docs(question, better_q)
@@ -348,25 +403,31 @@ def ask_rag(question: str, return_debug: bool = False):
         if not best_doc:
             return "❌ Không đủ dữ liệu để trả lời câu hỏi này."
 
-        # STEP 4: context
-        context = best_doc.page_content[:6000]
+        # STEP 4: context — include top-3 docs for richer context
+        # For scenario questions that reference multiple articles (e.g. Điều 200 + 201),
+        # supplementary docs improve completeness without exceeding token budget
+        context_parts = [best_doc.page_content]
+        for extra_doc in docs[:3]:
+            if extra_doc.page_content != best_doc.page_content:
+                context_parts.append(extra_doc.page_content)
+        context = "\n\n---\n\n".join(context_parts)[:6000]
 
         # STEP 5: classify using doc_type metadata
         q_type = classify_question(question, best_doc)
 
         # STEP 6: prompt with article hint
         article_ref = best_doc.metadata.get("article_reference", "")
-        topic       = best_doc.metadata.get("topic", "")
-        prompt      = build_prompt(context, question, q_type, article_ref, topic)
+        topic = best_doc.metadata.get("topic", "")
+        prompt = build_prompt(context, question, q_type, article_ref, topic)
 
-        # STEP 7: generate
-        answer = llm.invoke(prompt).content.strip()
+        # STEP 7: generate with retry
+        answer = _llm_invoke_with_retry(prompt)
 
         # STEP 8: clean
         answer = clean_answer(answer)
 
-        # STEP 9: citation
-        final_answer = answer + build_citation(best_doc.metadata)
+        # STEP 9: citation (pass answer so all cited articles are included)
+        final_answer = answer + build_citation(best_doc.metadata, answer)
 
         if return_debug:
             return {
@@ -377,7 +438,7 @@ def ask_rag(question: str, return_debug: bool = False):
             }
 
         return final_answer
-    
+
     except Exception as e:
         print("RAG ERROR:", e)
         return "❌ Lỗi hệ thống."
