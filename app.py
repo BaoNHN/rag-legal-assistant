@@ -9,7 +9,7 @@ from database.database import (
     login_user,
     create_chat, get_all_chats,
     save_message, get_messages,
-    rename_chat, upsert_import_chat
+    rename_chat, delete_chat
 )
 from engine.import_law_engine import run_import, get_job
 # Note: single users table (role 0=student, 1=teacher)
@@ -119,6 +119,18 @@ def api_create_chat():
 def api_rename_chat():
     data = request.get_json()
     rename_chat(data["chat_id"], data["title"])
+    return jsonify({"status": "ok"})
+
+
+@app.route("/delete_chat", methods=["POST"])
+def api_delete_chat():
+    if not logged_in():
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json()
+    chat_id = data.get("chat_id")
+    if not chat_id:
+        return jsonify({"error": "Missing chat_id"}), 400
+    delete_chat(chat_id)
     return jsonify({"status": "ok"})
 
 
