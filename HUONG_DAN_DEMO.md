@@ -129,7 +129,9 @@ Mở trình duyệt và truy cập: **http://127.0.0.1:5000**
 3. Nhấn **Đăng nhập**
 4. Hệ thống tự động điều hướng theo vai trò:
    - **Học sinh** → giao diện chat hỏi đáp
-   - **Giáo viên** → giao diện chat + nút **"Import Law"** trên thanh điều hướng
+   - **Giáo viên** → giao diện chat + nút **"Import Law"** trên thanh điều hướng + badge **"Giảng viên"**
+
+![Trang đăng nhập](login.png)
 
 ---
 
@@ -150,6 +152,8 @@ Mở trình duyệt và truy cập: **http://127.0.0.1:5000**
   - **📖 Nguồn:** trích dẫn điều luật cụ thể
   - **🔗 Link:** đường dẫn vbpl.vn (nếu có)
 
+![Giao diện chat học sinh](chat_index_student.png)
+
 ### Bước 3: Quản Lý Cuộc Trò Chuyện
 
 | Thao tác | Cách thực hiện |
@@ -168,8 +172,10 @@ Tính năng này cho phép giáo viên tải lên file PDF văn bản luật. H�
 ### Bước 1: Truy Cập Trang Import
 
 1. Đăng nhập bằng tài khoản giáo viên (`teacher1`)
-2. Nhấn nút **"Import Law"** trên thanh điều hướng
-3. Trang `/import` mở ra
+2. Sidebar hiển thị nút **"Import Law"** và badge **"Giảng viên"** ở header
+3. Nhấn nút **"Import Law"** — trang `/import` mở ra
+
+![Giao diện giáo viên — sidebar có nút Import Law và chat "Import new law"](chat_index_teacher.png)
 
 ### Bước 2: Điền Thông Tin và Upload
 
@@ -180,7 +186,9 @@ Tính năng này cho phép giáo viên tải lên file PDF văn bản luật. H�
 | Nguồn thu thập | `vbpl.vn` | Nguồn gốc tài liệu |
 | File PDF | _(chọn file .pdf)_ | File PDF của văn bản luật |
 
-Nhấn **"Import"** để bắt đầu.
+Nhấn **"🚀 Tải lên & Xử lý AI"** để bắt đầu.
+
+![Trang import PDF](import_pdf.png)
 
 ### Bước 3: Quy Trình Xử Lý Nền
 
@@ -203,6 +211,10 @@ Sau khi nhấn Import, hệ thống chạy nền các bước sau:
 - Giao diện hiển thị **thanh tiến trình realtime** và trạng thái từng bước
 - Trạng thái: `running` → `done` / `failed`
 - Khi hoàn tất, kết quả xuất hiện trong chat **"Import new law"** ở sidebar
+  - Thành công: `✅ Hoàn tất! Đã thêm X đoạn vào ChromaDB (bỏ qua Y đoạn trùng lặp).`
+  - Thất bại: `❌ Lỗi hệ thống.`
+
+![Kết quả import trong chat "Import new law"](import_result.png)
 
 ### Lưu Ý Quan Trọng
 
