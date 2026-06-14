@@ -5,8 +5,6 @@
 import os
 import threading
 import warnings
-import sqlite3, time
-import traceback
 import unicodedata, re as _re
 import cv2
 import numpy as np
@@ -20,6 +18,8 @@ from langchain_chroma import Chroma
 from vietocr.tool.predictor import Predictor
 from vietocr.tool.config import Cfg
 from PIL import ImageEnhance
+
+from database.database import upsert_import_chat
 
 warnings.filterwarnings("ignore", message=".*enable_nested_tensor.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*batch_first.*", category=UserWarning)
@@ -291,7 +291,8 @@ def run_import(job_id: str, pdf_path: str, so_ky_hieu: str,
     finally:
         # ── 7. Create/update 'Import new law' chat ──
         try:
-            _upsert_import_chat(student_id, job_id, db_conn_factory)
+            msg = get_job(job_id).get("message", "Xử lý hoàn tất.")
+            upsert_import_chat(student_id, msg)
         except Exception:
             pass
         # Cleanup temp PDF
@@ -300,37 +301,3 @@ def run_import(job_id: str, pdf_path: str, so_ky_hieu: str,
                 os.remove(pdf_path)
         except Exception:
             pass
-
-
-def _upsert_import_chat(student_id: int, job_id: str, db_conn_factory):
-    """Create 'Import new law' chat if not exists, add result message."""
-    conn = db_conn_factory()
-    c = conn.cursor()
-
-    CHAT_TITLE = "Import new law"
-
-    # Find existing chat with this title for this student
-    c.execute(
-        "SELECT id FROM chats WHERE student_id=? AND title=? AND role=1 ORDER BY created_at DESC LIMIT 1",
-        (student_id, CHAT_TITLE)
-    )
-    row = c.fetchone()
-
-    if row:
-        chat_id = row[0]
-    else:
-        chat_id = f"import_{int(time.time() * 1000)}"
-        created_at = time.time()
-        c.execute(
-            "INSERT INTO chats (id, student_id, title, created_at, role) VALUES (?,?,?,?,?)",
-            (chat_id, student_id, CHAT_TITLE, created_at, 1)  # role=1 → teacher chat
-        )
-
-    job = get_job(job_id)
-    msg = job.get("message", "Xử lý hoàn tất.")
-    c.execute(
-        "INSERT INTO messages (chat_id, role, text, timestamp) VALUES (?,?,?,?)",
-        (chat_id, "assistant", msg, time.time())
-    )
-    conn.commit()
-    conn.close()

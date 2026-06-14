@@ -205,3 +205,30 @@ def delete_chat(chat_id: str):
     c.execute("DELETE FROM chats    WHERE id=?",      (chat_id,))
     conn.commit()
     conn.close()
+
+
+def upsert_import_chat(user_id: int, message: str):
+    """Create 'Import new law' chat for teacher if missing, append message."""
+    conn  = sqlite3.connect(DB_NAME)
+    c     = conn.cursor()
+    TITLE = "Import new law"
+
+    c.execute(
+        "SELECT id FROM chats WHERE student_id=? AND title=? AND role=1 ORDER BY created_at DESC LIMIT 1",
+        (user_id, TITLE)
+    )
+    row = c.fetchone()
+    if row:
+        chat_id = row[0]
+    else:
+        chat_id = f"import_{int(time.time()*1000)}"
+        c.execute(
+            "INSERT INTO chats (id, student_id, title, created_at, role) VALUES (?,?,?,?,?)",
+            (chat_id, user_id, TITLE, time.time(), 1)
+        )
+    c.execute(
+        "INSERT INTO messages (chat_id, role, text, timestamp) VALUES (?,?,?,?)",
+        (chat_id, "assistant", message, time.time())
+    )
+    conn.commit()
+    conn.close()
