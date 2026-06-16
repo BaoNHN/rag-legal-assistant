@@ -1,6 +1,6 @@
 # import_law_engine.py
-# Background worker: OCR a PDF and add to ChromaDB without clearing existing data.
-# Called by app.py via threading after /import_law POST.
+# Background worker: extract text (or OCR) a PDF and add to ChromaDB.
+# Auto-detects selectable PDFs and skips OCR when direct text extraction suffices.
 
 import os
 import threading
@@ -189,46 +189,75 @@ def _segment(full_text: str) -> list:
     return segs
 
 
+# ── Direct text extraction (selectable PDFs) ─────────────────────────────────
+_MIN_CHARS_PER_PAGE = 150  # avg below this → treat as scanned, use OCR
+
+
+def _extract_text_pdf(pdf_path: str, total_pages: int):
+    """
+    Try to extract text directly with pypdf.
+    Returns {page_num: text} when the PDF has selectable text,
+    or None when it appears to be a scan (too few characters).
+    """
+    reader = PdfReader(pdf_path)
+    pages_text = {}
+    for i, page in enumerate(reader.pages, start=1):
+        raw = page.extract_text() or ""
+        text = _re.sub(r'[ \t]+', ' ', raw)
+        text = _re.sub(r'\n{3,}', '\n\n', text).strip()
+        pages_text[i] = text
+
+    avg_chars = sum(len(t) for t in pages_text.values()) / max(total_pages, 1)
+    return pages_text if avg_chars >= _MIN_CHARS_PER_PAGE else None
+
+
 # ── Main background job ───────────────────────────────────────────────────────
 def run_import(job_id: str, pdf_path: str, so_ky_hieu: str,
                loai_van_ban: str, nguon_thu_thap: str,
                student_id: int, db_conn_factory):
     """
-    Full pipeline: OCR → segment → embed → add to ChromaDB (no wipe).
-    Updates job status and creates/updates 'Import new law' chat on finish.
+    Full pipeline: auto-detect PDF type → extract text or OCR →
+    segment → embed → add to ChromaDB (no wipe).
     """
-    _set_job(job_id, status="running", message="Đang khởi động VietOCR…")
+    _set_job(job_id, status="running", message="Kiểm tra loại PDF…")
 
     try:
-        # ── 1. Load VietOCR ──
+        reader = PdfReader(pdf_path)
+        total_pages = len(reader.pages)
 
-        device = _detect_device()
-        cfg = Cfg.load_config_from_name('vgg_transformer')
-        cfg['device'] = device
-        cfg['predictor']['beamsearch'] = True
-        detector = Predictor(cfg)
-        _set_job(job_id, message=f"VietOCR loaded ({device.upper()}). Bắt đầu OCR…")
+        # ── 1. Try direct text extraction first ──
+        all_text_by_page = _extract_text_pdf(pdf_path, total_pages)
 
-        # ── 2. OCR ──
-        total_pages = len(PdfReader(pdf_path).pages)
-        all_text_by_page = {}
-        BATCH = 5
-        DPI = 250
+        if all_text_by_page:
+            _set_job(job_id, message=f"PDF văn bản số ({total_pages} trang). Trích xuất hoàn tất.")
+        else:
+            # ── 2. Fall back to VietOCR for scanned PDFs ──
+            _set_job(job_id, message="PDF scan — đang khởi động VietOCR…")
+            device = _detect_device()
+            cfg = Cfg.load_config_from_name('vgg_transformer')
+            cfg['device'] = device
+            cfg['predictor']['beamsearch'] = True
+            detector = Predictor(cfg)
+            _set_job(job_id, message=f"VietOCR loaded ({device.upper()}). Bắt đầu OCR…")
 
-        for batch_start in range(1, total_pages + 1, BATCH):
-            batch_end = min(batch_start + BATCH - 1, total_pages)
-            _set_job(job_id, message=f"OCR trang {batch_start}–{batch_end}/{total_pages}…")
+            all_text_by_page = {}
+            BATCH = 5
+            DPI = 250
 
-            kwargs = dict(dpi=DPI, first_page=batch_start, last_page=batch_end, fmt='jpeg')
-            if os.path.isdir(POPPLER_PATH):
-                kwargs['poppler_path'] = POPPLER_PATH
+            for batch_start in range(1, total_pages + 1, BATCH):
+                batch_end = min(batch_start + BATCH - 1, total_pages)
+                _set_job(job_id, message=f"OCR trang {batch_start}–{batch_end}/{total_pages}…")
 
-            pages = convert_from_path(pdf_path, **kwargs)
-            for i, pg in enumerate(pages):
-                all_text_by_page[batch_start + i] = _ocr_page(detector, pg)
-            del pages
+                kwargs = dict(dpi=DPI, first_page=batch_start, last_page=batch_end, fmt='jpeg')
+                if os.path.isdir(POPPLER_PATH):
+                    kwargs['poppler_path'] = POPPLER_PATH
 
-        # ── 3. Save raw OCR ──
+                pages = convert_from_path(pdf_path, **kwargs)
+                for i, pg in enumerate(pages):
+                    all_text_by_page[batch_start + i] = _ocr_page(detector, pg)
+                del pages
+
+        # ── 3. Save raw text ──
         raw_txt = os.path.join(BASE_DIR, f"{so_ky_hieu.replace('/', '_')}_{nguon_thu_thap.replace(' ', '_')}.txt")
         with open(raw_txt, 'w', encoding='utf-8') as f:
             for p in sorted(all_text_by_page):
@@ -237,7 +266,7 @@ def run_import(job_id: str, pdf_path: str, so_ky_hieu: str,
         full_text = "\n".join(all_text_by_page[p] for p in sorted(all_text_by_page))
 
         # ── 4. Segment ──
-        _set_job(job_id, message="Phân đoạn văn bản pháp luật…")
+        _set_job(job_id, message=f"Phân đoạn văn bản pháp luật ({len(full_text):,} ký tự)…")
         segs = _segment(full_text)
 
         # ── 5. Build documents ──
@@ -286,7 +315,9 @@ def run_import(job_id: str, pdf_path: str, so_ky_hieu: str,
         _set_job(job_id, status="done", message=result_msg)
 
     except Exception as e:
-        _set_job(job_id, status="failed", message=f"❌ Lỗi hệ thống.")
+        import traceback
+        traceback.print_exc()
+        _set_job(job_id, status="failed", message=f"❌ Lỗi: {e}")
 
     finally:
         # ── 7. Create/update 'Import new law' chat ──
