@@ -261,6 +261,19 @@ main {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Processing progress banner */
+.progress-banner {
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+  margin-top: 14px;
+  background: rgba(13,180,162,0.08);
+  border: 1px solid rgba(13,180,162,0.25);
+}
+.progress-banner h3 { font-size: 15px; font-weight: 600; color: var(--teal2); margin-bottom: 6px; }
+.progress-banner p  { font-size: 12.5px; color: var(--gray); line-height: 1.6; min-height: 2em; }
+.progress-banner .spin-icon { display:inline-block; animation: spin 2s linear infinite; font-style:normal; }
+
 /* Success state */
 .success-banner {
   display: none;
@@ -420,15 +433,18 @@ main {
       <span id="btnText">🚀 Tải lên &amp; Xử lý AI</span>
     </button>
 
+    <!-- Progress banner (live status while background job runs) -->
+    <div class="progress-banner" id="progressBanner" style="display:none;">
+      <i class="spin-icon">⚙️</i>
+      <h3>Đang xử lý…</h3>
+      <p id="progressMsg">Khởi động…</p>
+    </div>
+
     <!-- Success banner -->
     <div class="success-banner" id="successBanner">
       <div class="s-icon">✅</div>
-      <h3>Tải lên thành công!</h3>
-      <p>
-        Dữ liệu đang được AI xử lý OCR và lập chỉ mục.<br/>
-        Quá trình này chạy nền và có thể mất <strong>15–60 phút</strong>.<br/>
-        Khi hoàn tất, chat <em>"Import new law"</em> sẽ được cập nhật tự động.
-      </p>
+      <h3>Hoàn tất!</h3>
+      <p id="successMsg"></p>
     </div>
   </div>
 
@@ -593,8 +609,8 @@ async function handleSubmit() {
     });
     const data = await res.json();
     if (data.status === 'ok') {
-      document.getElementById('successBanner').style.display = 'block';
       btn.style.display = 'none';
+      startPolling(data.job_id);
     } else {
       throw new Error(data.message || 'Server error');
     }
@@ -605,6 +621,38 @@ async function handleSubmit() {
     document.getElementById('spinner').style.display = 'none';
     document.getElementById('btnText').textContent = '🚀 Tải lên & Xử lý AI';
   }
+}
+
+function startPolling(jobId) {
+  const progressBanner = document.getElementById('progressBanner');
+  const msgEl = document.getElementById('progressMsg');
+  progressBanner.style.display = 'block';
+
+  const timer = setInterval(async () => {
+    try {
+      const res = await fetch('/import_status/' + jobId);
+      const job = await res.json();
+      if (job.message) msgEl.textContent = job.message;
+
+      if (job.status === 'done') {
+        clearInterval(timer);
+        progressBanner.style.display = 'none';
+        document.getElementById('successMsg').innerHTML = job.message.replace(/\n/g, '<br/>');
+        document.getElementById('successBanner').style.display = 'block';
+      } else if (job.status === 'failed') {
+        clearInterval(timer);
+        progressBanner.style.display = 'none';
+        const errEl = document.getElementById('globalError');
+        errEl.textContent = job.message || '❌ Xử lý thất bại.';
+        errEl.style.display = 'block';
+        const btn = document.getElementById('submitBtn');
+        btn.disabled = false;
+        btn.style.display = 'flex';
+        document.getElementById('spinner').style.display = 'none';
+        document.getElementById('btnText').textContent = '🚀 Tải lên & Xử lý AI';
+      }
+    } catch (e) { /* keep polling on network errors */ }
+  }, 2000);
 }
 </script>
 </body>
