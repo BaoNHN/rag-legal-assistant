@@ -71,8 +71,12 @@ body {
 .chat-title {
     font-size: 14px;
     color: white;
-    flex: 1;            /* makes clickable area large */
+    flex: 1;
     padding-right: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 170px;
 }
 
 .chat-options {
@@ -138,14 +142,87 @@ body {
     min-height: 0;
 }
 
+/* ── Welcome screen ─────────────────────────────── */
+#welcome-screen {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding-bottom: 40px;
+}
+
+.welcome-title {
+    font-size: 28px;
+    font-weight: 600;
+    color: #212121;
+    margin: 0 0 8px 0;
+    text-align: center;
+}
+
+.welcome-subtitle {
+    font-size: 15px;
+    color: #757575;
+    margin: 0 0 28px 0;
+    text-align: center;
+}
+
+.suggestion-chips {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.chip {
+    padding: 9px 16px;
+    border: 1.5px solid #E0E0E0;
+    border-radius: 20px;
+    background: white;
+    color: #424242;
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.chip:hover {
+    border-color: #6200EA;
+    background: #F3E5F5;
+    color: #6200EA;
+}
+
+/* Hidden when chatting */
+.container.is-chatting #welcome-screen {
+    display: none;
+}
+
+/* ── Chatbox ────────────────────────────────────── */
 .chatbox {
     flex: 1;
     padding: 16px;
-    overflow-y: auto;  /* THIS is where scrolling happens */
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 8px;
     min-height: 0;
+}
+
+/* Hidden until chatting */
+#chatbox {
+    display: none;
+}
+
+.container.is-chatting #chatbox {
+    display: flex;
+}
+
+/* ── Disclaimer ─────────────────────────────────── */
+#disclaimer {
+    text-align: center;
+    font-size: 12px;
+    color: #9E9E9E;
+    padding: 6px 16px 8px;
+    background: white;
 }
 
 /* Message bubbles */
@@ -240,4 +317,33 @@ body {
 
 .chat-message {
     white-space: pre-wrap;
+}
+
+/* Citation block inside assistant message */
+.msg-body {
+    margin-bottom: 6px;
+}
+
+.msg-citation {
+    font-size: 12px;
+    background: #e3f2fd;
+    border-left: 3px solid #1976D2;
+    padding: 6px 10px;
+    border-radius: 4px;
+    color: #1565C0;
+    margin-top: 8px;
+    white-space: pre-wrap;
+}
+
+.msg-citation-secondary {
+    font-size: 11px;
+    background: #f3e5f5;
+    border-left: 3px solid #9c27b0;
+    padding: 5px 10px;
+    border-radius: 4px;
+    color: #6a1b9a;
+    margin-top: 4px;
+    white-space: pre-wrap;
+    max-height: 80px;
+    overflow-y: auto;
 }

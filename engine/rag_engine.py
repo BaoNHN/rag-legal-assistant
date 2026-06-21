@@ -17,6 +17,18 @@ STOPWORDS = {
     "theo", "là", "gì", "về", "của", "và",
     "trong", "được", "cho", "có", "khi"
 }
+
+# Keywords indicating out-of-scope questions (not business law)
+OUT_OF_SCOPE_KEYWORDS = [
+    "ly hôn", "li hôn", "hôn nhân", "gia đình", "ly thân", "kết hôn",
+    "hình sự", "tội phạm", "khởi tố", "bắt giữ", "truy tố", "tù giam",
+    "đất đai", "nhà ở", "bất động sản", "quyền sử dụng đất",
+    "bảo hiểm xã hội", "bảo hiểm y tế", "tai nạn lao động",
+    "thuế thu nhập cá nhân", "thuế giá trị gia tăng", "thuế tiêu thụ",
+    "hải quan", "xuất nhập khẩu", "hành chính công",
+]
+
+SIMILARITY_THRESHOLD = 1.3  # L2 distance; above this → not relevant enough
 PROCEDURE_PATTERNS = [
     "trình tự",
     "thủ tục",
@@ -195,8 +207,13 @@ def retrieve_docs(question: str, rewritten_q: str):
             if scored and scored[0][0] >= 0.55:
                 return [d for _, d in scored[:5]]
 
-        # ===== FALLBACK SEMANTIC SEARCH =====
-        return retriever.invoke(rewritten_q)
+        # ===== FALLBACK SEMANTIC SEARCH with similarity threshold =====
+        results_with_scores = vectorstore.similarity_search_with_score(rewritten_q, k=5)
+        if not results_with_scores:
+            return []
+        # Filter: L2 distance lower = more similar; reject docs above threshold
+        filtered = [doc for doc, score in results_with_scores if score <= SIMILARITY_THRESHOLD]
+        return filtered if filtered else []
 
     except Exception:
         return retriever.invoke(rewritten_q)
@@ -311,13 +328,14 @@ def build_prompt(context: str, question: str, q_type: str,
             line += f" — {topic}"
         article_hint = f"\nCăn cứ pháp lý: {line}\n"
 
-    base = f"""Bạn là trợ lý pháp lý Việt Nam.
+    base = f"""Bạn là trợ lý pháp lý Việt Nam chuyên về Luật Doanh nghiệp.
 
-⚠️ QUY TẮC:
-- Chỉ trả lời 1 cách duy nhất
-- Không chào hỏi, không giải thích dư
-- Luôn trích dẫn đúng điều luật cụ thể
-- Không bịa thêm điều luật ngoài tài liệu
+⚠️ QUY TẮC BẮT BUỘC:
+- Câu trả lời TỐI ĐA 200 từ.
+- Không chào hỏi, không giải thích dư thừa.
+- Không liệt kê toàn bộ văn bản luật — chỉ trả lời đúng nội dung câu hỏi.
+- CĂN CỨ PHÁP LÝ phải lấy ĐÚNG từ tài liệu được cung cấp. KHÔNG tự suy diễn hay thay đổi số điều luật.
+- Nếu tài liệu có metadata căn cứ pháp lý, phải sử dụng đúng điều luật đó.
 {article_hint}
 Tài liệu:
 {context}
@@ -326,20 +344,20 @@ Câu hỏi: {question}
 
 """
     if q_type == "procedure":
-        base += "Trả lời dạng các bước rõ ràng (1, 2, 3...)."
+        base += "Trả lời dạng các bước ngắn gọn (1, 2, 3...). Tối đa 200 từ."
     elif q_type == "condition":
-        base += "Chỉ liệt kê các điều kiện/yêu cầu."
+        base += "Liệt kê ngắn gọn các điều kiện/yêu cầu. Tối đa 200 từ."
     elif q_type == "definition":
-        base += "Trả lời ngắn gọn định nghĩa, nêu rõ căn cứ điều luật."
+        base += "Trả lời ngắn gọn định nghĩa, nêu rõ căn cứ điều luật. Tối đa 200 từ."
     else:
-        base += "Trả lời ngắn gọn, đúng trọng tâm, nêu CĂN CỨ PHÁP LÝ đầy đủ (tất cả các Điều liên quan)."
+        base += "Trả lời ngắn gọn, đúng trọng tâm, nêu CĂN CỨ PHÁP LÝ. Tối đa 200 từ."
     return base
 
 
 # =========================
 # BUILD CITATION
 # =========================
-def build_citation(meta: dict, answer: str = "") -> str:
+def build_citation(meta: dict, answer: str = "", secondary_docs=None) -> str:
     article_ref = meta.get("article_reference", "")
     topic = meta.get("topic", "")
     so_ky_hieu = meta.get("so_ky_hieu", "")
@@ -363,27 +381,79 @@ def build_citation(meta: dict, answer: str = "") -> str:
     parts = []
     if article_ref:
         line = article_ref
-        # Only add topic label for single article citations
         if topic and ";" not in article_ref:
             line += f" ({topic})"
         parts.append(line)
+
     law_name = f"{loai} {so_ky_hieu}".strip()
+    if "67/VBHN" in so_ky_hieu or "67/VBHN" in law_name:
+        law_name = "Văn bản hợp nhất Luật Doanh nghiệp số 67/VBHN-VPQH năm 2025"
+    elif "59/2020" in so_ky_hieu or "59/2020" in law_name:
+        law_name = "Luật Doanh nghiệp số 59/2020/QH14"
     if law_name:
         parts.append(law_name)
 
     citation = " — ".join(parts) if parts else meta.get("nguon_thu_thap", "")
-    result = f"\n\n📖 Nguồn: {citation}"
+    result = f"\n\n📖 Nguồn chính: {citation}"
     if source_url and "vbpl.vn" in source_url:
         result += f"\n🔗 {source_url}"
+
+    # Secondary sources (max 3, deduplicated, short format)
+    if secondary_docs:
+        primary_ref = meta.get("article_reference", "")
+        seen_refs = {primary_ref} if primary_ref else set()
+        secondary_lines = []
+
+        for doc in secondary_docs[:3]:
+            m = doc.metadata
+            s_article = m.get("article_reference", "")
+            s_topic = m.get("topic", "")
+            s_ky_hieu = m.get("so_ky_hieu", "")
+
+            if not s_article or s_article in seen_refs:
+                continue
+            seen_refs.add(s_article)
+
+            if "67/VBHN" in s_ky_hieu:
+                s_law = "VBHN 67/VBHN-VPQH"
+            elif "59/2020" in s_ky_hieu:
+                s_law = "LDN 59/2020/QH14"
+            else:
+                s_law = s_ky_hieu[:20] if s_ky_hieu else ""
+
+            s_line = s_article
+            if s_topic and ";" not in s_article:
+                short_topic = s_topic[:25] + "…" if len(s_topic) > 25 else s_topic
+                s_line += f" ({short_topic})"
+            if s_law:
+                s_line += f" — {s_law}"
+
+            if len(s_line) > 100:
+                s_line = s_line[:97] + "…"
+
+            secondary_lines.append(f"• {s_line}")
+
+        if secondary_lines:
+            result += "\n📎 Nguồn tham khảo:\n" + "\n".join(secondary_lines)
+
     return result
 
 
 # =========================
 # MAIN
 # =========================
+def _is_out_of_scope(question: str) -> bool:
+    q = question.lower()
+    return any(kw in q for kw in OUT_OF_SCOPE_KEYWORDS)
+
+
 def ask_rag(question: str, return_debug: bool = False):
     try:
         question = str(question)
+
+        # Pre-check: question outside business law scope
+        if _is_out_of_scope(question):
+            return "⚠️ Câu hỏi này nằm ngoài phạm vi dữ liệu Luật Doanh nghiệp của hệ thống. Vui lòng đặt câu hỏi liên quan đến Luật Doanh nghiệp."
 
         # STEP 1: rewrite — SKIP if topic is extractable
         # Knowledge questions follow "quy định về X là gì?" pattern.
@@ -396,7 +466,7 @@ def ask_rag(question: str, return_debug: bool = False):
         docs = retrieve_docs(question, better_q)
 
         if not docs:
-            return "❌ Không tìm thấy thông tin liên quan trong cơ sở dữ liệu pháp luật."
+            return "⚠️ Không tìm thấy thông tin đủ liên quan trong cơ sở dữ liệu. Vui lòng hỏi rõ hơn hoặc kiểm tra câu hỏi có thuộc phạm vi Luật Doanh nghiệp không."
 
         # STEP 3: rerank
         best_doc = select_best_doc(better_q, docs)
@@ -404,13 +474,13 @@ def ask_rag(question: str, return_debug: bool = False):
             return "❌ Không đủ dữ liệu để trả lời câu hỏi này."
 
         # STEP 4: context — include top-3 docs for richer context
-        # For scenario questions that reference multiple articles (e.g. Điều 200 + 201),
-        # supplementary docs improve completeness without exceeding token budget
         context_parts = [best_doc.page_content]
+        extra_docs = []
         for extra_doc in docs[:3]:
             if extra_doc.page_content != best_doc.page_content:
                 context_parts.append(extra_doc.page_content)
-        context = "\n\n---\n\n".join(context_parts)[:6000]
+                extra_docs.append(extra_doc)
+        context = "\n\n---\n\n".join(context_parts)[:3000]
 
         # STEP 5: classify using doc_type metadata
         q_type = classify_question(question, best_doc)
@@ -426,8 +496,8 @@ def ask_rag(question: str, return_debug: bool = False):
         # STEP 8: clean
         answer = clean_answer(answer)
 
-        # STEP 9: citation (pass answer so all cited articles are included)
-        final_answer = answer + build_citation(best_doc.metadata, answer)
+        # STEP 9: citation (pass answer + extra_docs for secondary sources)
+        final_answer = answer + build_citation(best_doc.metadata, answer, extra_docs)
 
         if return_debug:
             return {

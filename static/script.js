@@ -3,14 +3,33 @@ const chatInput = document.getElementById("chatInput");
 const chatbox = document.getElementById("chatbox");
 const chatList = document.getElementById("chat-list");
 const newChatBtn = document.querySelector(".new-chat");
+const mainContainer = document.getElementById("mainContainer");
 
 let currentChatId = null;
 let chats = {};  // { chatId: [{role:'user', text:'hi'}, ...] }
+
+// ── Welcome / Chat mode toggle ────────────────────
+function enterChatMode() {
+    mainContainer.classList.add("is-chatting");
+}
+
+function enterWelcomeMode() {
+    mainContainer.classList.remove("is-chatting");
+}
+
+// ── Suggestion chips ──────────────────────────────
+document.querySelectorAll(".chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+        chatInput.value = chip.dataset.prompt;
+        chatInput.focus();
+    });
+});
 
 // load Chat From DataBase
 async function loadChatFromDB(chatId) {
     currentChatId = chatId;
     clearChatbox();
+    enterChatMode();
 
     const messages = await fetch(`/get_chat_messages?chat_id=${chatId}`)
         .then(r => r.json());
@@ -22,20 +41,41 @@ async function loadChatFromDB(chatId) {
     });
 }
 
+// Format assistant message: separate citation block from main body
+function formatAssistantHTML(text) {
+    const parts = text.split(/\n*📖 Nguồn chính:/);
+    const body = parts[0].trim().replace(/\n/g, "<br>");
+    let html = `<div class="msg-body">${body}</div>`;
+    if (parts.length > 1) {
+        const citationRaw = parts[1].trim();
+        const citParts = citationRaw.split(/\n📎 Nguồn tham khảo:/);
+        const primary = citParts[0].trim().replace(/\n/g, "<br>");
+        html += `<div class="msg-citation">📖 Nguồn chính: ${primary}</div>`;
+        if (citParts.length > 1) {
+            const secondary = citParts[1].trim().replace(/\n/g, "<br>");
+            html += `<div class="msg-citation-secondary">📎 Nguồn tham khảo:<br>${secondary}</div>`;
+        }
+    }
+    return html;
+}
+
 // Display chat bubbles
 async function displayMessage(message, isUser) {
-                const msgElem = document.createElement('div');
-            msgElem.innerHTML = message.replace(/\n/g, "<br>");
-            msgElem.className = `chat-message ${isUser ? 'user-message' : 'assistant-message'}`;
-            chatbox.appendChild(msgElem);
-            chatbox.scrollTop = chatbox.scrollHeight; // Scroll to the bottom
+    const msgElem = document.createElement('div');
+    if (isUser) {
+        msgElem.innerHTML = message.replace(/\n/g, "<br>");
+    } else {
+        msgElem.innerHTML = formatAssistantHTML(message);
+    }
+    msgElem.className = `chat-message ${isUser ? 'user-message' : 'assistant-message'}`;
+    chatbox.appendChild(msgElem);
+    chatbox.scrollTop = chatbox.scrollHeight;
 
-            // For assistant messages, add a slight delay before displaying
-            if (!isUser) {
-                msgElem.style.opacity = 0; // Start with opacity 0
-                await new Promise(resolve => setTimeout(resolve, 300)); // Delay
-                msgElem.style.opacity = 1; // Fade in
-            }
+    if (!isUser) {
+        msgElem.style.opacity = 0;
+        await new Promise(resolve => setTimeout(resolve, 300));
+        msgElem.style.opacity = 1;
+    }
 }
 
 async function callApi(prompt) {
@@ -122,7 +162,10 @@ sendButton.addEventListener('click', async () => {
             }
         }
 
-        // 5️⃣ Display user message
+        // 5️⃣ Switch to chat mode on first message
+        enterChatMode();
+
+        // Display user message
         displayMessage(message, true);
         chatInput.value = "";
 
@@ -162,13 +205,14 @@ async function createNewChat() {
 
     const data = await res.json();
 
-    currentChatId = data.chat_id;   // ✅ lấy từ server
+    currentChatId = data.chat_id;
 
     chats[currentChatId] = [];
 
     createChatItem(currentChatId, "New Chat");
 
     clearChatbox();
+    enterWelcomeMode();
 }
 
 function clearChatbox() {
@@ -193,7 +237,9 @@ function renameChat(chatId, newName) {
     const items = document.querySelectorAll(".chat-item");
     items.forEach(i => {
         if (i.dataset.id === chatId) {
-            i.querySelector(".chat-title").innerText = newName;
+            const titleElem = i.querySelector(".chat-title");
+            titleElem.innerText = newName;
+            titleElem.title = newName;
         }
     });
 }
@@ -204,7 +250,7 @@ function createChatItem(chatId, title) {
     item.dataset.id = chatId;
 
     item.innerHTML = `
-        <span class="chat-title">${title}</span>
+        <span class="chat-title" title="${title}">${title}</span>
         <span class="chat-options">⋯</span>
     `;
 

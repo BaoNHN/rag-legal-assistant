@@ -41,11 +41,11 @@
       margin-left: 6px;
       vertical-align: middle;
     }
-.role-badge.teacher {
-    background: whitesmoke;
-    color: #E8A020;
-    border: 1.5px solid #E8A020;
-}
+    .role-badge.teacher {
+      background: whitesmoke;
+      color: #E8A020;
+      border: 1.5px solid #E8A020;
+    }
   </style>
 </head>
 <body>
@@ -68,14 +68,33 @@
       <span id="roleBadge"></span>
       <button onclick="logout()" style="float:right;background:rgba(255,255,255,0.1);border:none;color:white;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;">Logout</button>
     </div>
-    <div class="container">
+    <div class="container" id="mainContainer">
+
+      <!-- Welcome screen (shown when no messages) -->
+      <div id="welcome-screen">
+        <h1 class="welcome-title">Chúng ta nên bắt đầu từ đâu?</h1>
+        <p class="welcome-subtitle">Đặt câu hỏi về Luật Doanh nghiệp 2020 – 2025</p>
+        <div class="suggestion-chips">
+          <button class="chip" data-prompt="Cổ đông là gì?">💡 Cổ đông là gì?</button>
+          <button class="chip" data-prompt="Thành lập công ty TNHH cần điều kiện gì?">🏢 Thành lập công ty TNHH</button>
+          <button class="chip" data-prompt="Doanh nghiệp tạm ngừng kinh doanh cần làm gì?">📋 Tạm ngừng kinh doanh</button>
+        </div>
+      </div>
+
+      <!-- Chatbox (shown when chatting) -->
       <div id="chatbox" class="chatbox"></div>
+
+      <!-- Input bar — design unchanged -->
       <div class="input-area">
         <input id="chatInput" type="text" placeholder="Nhập câu hỏi về Luật Doanh nghiệp…"/>
         <button id="sendButton">
           <span class="material-icons">send</span> Gửi
         </button>
       </div>
+
+      <!-- Disclaimer text below input -->
+      <div id="disclaimer">Trợ lý pháp lý có thể mắc lỗi. Hãy kiểm tra các thông tin pháp lý quan trọng.</div>
+
     </div>
   </main>
 </div>
