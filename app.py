@@ -17,7 +17,7 @@ from database.database import (
 from engine.import_law_engine import run_import, get_job
 
 app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key="secret_key")
+app.add_middleware(SessionMiddleware, secret_key="secret_key", max_age=7200)
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads_tmp")
