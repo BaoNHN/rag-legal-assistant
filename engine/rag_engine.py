@@ -455,6 +455,68 @@ def _is_out_of_scope(question: str) -> bool:
     return any(kw in q for kw in OUT_OF_SCOPE_KEYWORDS)
 
 
+# ── Meta: hỏi về database/hệ thống ──────────────────
+_META_DB_PATTERNS = [
+    r'(database|cơ sở dữ liệu|hệ thống).*(bao nhiêu|lưu|chứa)',
+    r'(đang lưu|lưu giữ|có chứa).*(bao nhiêu)',
+    r'bao nhiêu (điều luật|văn bản|tài liệu).*(lưu|database|hệ thống)',
+]
+
+def _is_meta_db_question(question: str) -> bool:
+    q = question.lower()
+    return any(re.search(p, q) for p in _META_DB_PATTERNS)
+
+def _answer_meta_db() -> str:
+    try:
+        data   = vectorstore.get(include=["metadatas"])
+        metas  = data["metadatas"]
+        total  = len(metas)
+        refs   = {m.get("article_reference", "") for m in metas if m.get("article_reference")}
+        refs.discard("")
+        nguons = {m.get("so_ky_hieu", "") for m in metas if m.get("so_ky_hieu")}
+        nguons.discard("")
+        return (
+            f"**Kết luận:** Hệ thống đang lưu {total} đoạn văn bản, "
+            f"tương ứng {len(refs)} điều luật khác nhau.\n"
+            f"**Phân tích:** Dữ liệu được lấy từ {len(nguons)} nguồn văn bản pháp luật: "
+            f"{', '.join(sorted(nguons))}. "
+            f"Mỗi điều luật có thể được lưu thành nhiều đoạn để tối ưu tìm kiếm.\n"
+            f"**Lưu ý:** Con số này có thể tăng khi giáo viên import thêm văn bản pháp luật mới."
+            f"\n\n📖 Nguồn: ChromaDB — RAG Legal Assistant"
+        )
+    except Exception as e:
+        return f"❌ Không thể truy vấn database: {e}"
+
+
+# ── Meta: hỏi tổng số điều của bộ luật ──────────────
+_META_LAW_COUNT_PATTERNS = [
+    r'luật doanh nghiệp.*(có|gồm|bao gồm).*(bao nhiêu điều|mấy điều)',
+    r'bao nhiêu điều.*(luật doanh nghiệp)',
+    r'(59/2020|67/vbhn|luật doanh nghiệp).*(bao nhiêu|mấy).*(điều|chương)',
+    r'(bao nhiêu|mấy) (điều|chương).*(luật doanh nghiệp|59/2020|67/vbhn)',
+    r'(cấu trúc|cơ cấu|gồm).*(chương|điều).*(luật doanh nghiệp)',
+]
+
+def _is_meta_law_count_question(question: str) -> bool:
+    q = question.lower()
+    return any(re.search(p, q) for p in _META_LAW_COUNT_PATTERNS)
+
+def _answer_meta_law_count(question: str) -> str:
+    prompt = (
+        "Bạn là trợ lý pháp lý Việt Nam. Trả lời ngắn gọn câu hỏi sau về cấu trúc Luật Doanh nghiệp.\n"
+        "Trả lời theo cấu trúc:\n"
+        "**Kết luận:** [1 câu trực tiếp]\n"
+        "**Phân tích:** [2-3 câu chi tiết về cấu trúc luật]\n"
+        "**Lưu ý:** [điểm cần nhớ]\n\n"
+        f"Câu hỏi: {question}"
+    )
+    try:
+        answer = _llm_invoke_with_retry(prompt)
+        return answer + "\n\n📖 Nguồn: Kiến thức tổng quát về Luật Doanh nghiệp Việt Nam"
+    except Exception as e:
+        return f"❌ Lỗi: {e}"
+
+
 def ask_rag(question: str, return_debug: bool = False):
     try:
         question = str(question)
@@ -462,6 +524,14 @@ def ask_rag(question: str, return_debug: bool = False):
         # Pre-check: question outside business law scope
         if _is_out_of_scope(question):
             return "⚠️ Câu hỏi này nằm ngoài phạm vi dữ liệu Luật Doanh nghiệp của hệ thống. Vui lòng đặt câu hỏi liên quan đến Luật Doanh nghiệp."
+
+        # Pre-check: meta about law structure (check before db — more specific)
+        if _is_meta_law_count_question(question):
+            return _answer_meta_law_count(question)
+
+        # Pre-check: meta question about the database
+        if _is_meta_db_question(question):
+            return _answer_meta_db()
 
         # STEP 1: rewrite — SKIP if topic is extractable
         # Knowledge questions follow "quy định về X là gì?" pattern.
