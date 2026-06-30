@@ -164,17 +164,19 @@ async def import_law(
     if not pdf_file or not so_ky_hieu or not loai_van_ban or not nguon_thu_thap:
         return JSONResponse({
             "status": "error",
-            "message": "Vui lòng tải lên file PDF và điền đầy đủ tất cả 3 trường."
+            "message": "Vui lòng tải lên file PDF hoặc DOCX và điền đầy đủ tất cả 3 trường."
         }, status_code=400)
 
-    if not (pdf_file.filename or "").lower().endswith(".pdf"):
-        return JSONResponse({"status": "error", "message": "Chỉ chấp nhận file PDF."}, status_code=400)
+    filename_lower = (pdf_file.filename or "").lower()
+    if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".docx")):
+        return JSONResponse({"status": "error", "message": "Chỉ chấp nhận file PDF hoặc DOCX."}, status_code=400)
 
+    ext      = ".docx" if filename_lower.endswith(".docx") else ".pdf"
     job_id   = str(uuid.uuid4())
-    pdf_path = os.path.join(UPLOAD_DIR, f"{job_id}.pdf")
+    file_path = os.path.join(UPLOAD_DIR, f"{job_id}{ext}")
 
     content = await pdf_file.read()
-    with open(pdf_path, "wb") as f:
+    with open(file_path, "wb") as f:
         f.write(content)
 
     teacher_id = request.session["user_id"]
@@ -182,7 +184,7 @@ async def import_law(
     background_tasks.add_task(
         run_import,
         job_id=job_id,
-        pdf_path=pdf_path,
+        file_path=file_path,
         so_ky_hieu=so_ky_hieu,
         loai_van_ban=loai_van_ban,
         nguon_thu_thap=nguon_thu_thap,

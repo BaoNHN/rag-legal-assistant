@@ -319,11 +319,54 @@ body {
     white-space: pre-wrap;
 }
 
-/* Citation block inside assistant message */
+/* ── Structured answer sections (Lỗi 7) ─────────── */
 .msg-body {
     margin-bottom: 6px;
 }
 
+.msg-section {
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+
+.section-label {
+    display: block;
+    font-weight: 700;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 4px;
+}
+
+/* Kết luận — nền hồng nhạt, chữ label đỏ */
+.msg-conclusion {
+    background: #fff5f5;
+    border-left: 3px solid #e53935;
+    color: #212121;
+}
+.msg-conclusion .section-label { color: #e53935; }
+
+/* Phân tích — nền xanh nhạt, chữ label xanh */
+.msg-analysis {
+    background: #e8f4fd;
+    border-left: 3px solid #1565C0;
+    color: #212121;
+}
+.msg-analysis .section-label { color: #1565C0; }
+
+/* Lưu ý — nền vàng nhạt, chữ label vàng đậm */
+.msg-note {
+    background: #fffde7;
+    border-left: 3px solid #f9a825;
+    color: #33280d;
+    font-size: 12.5px;
+}
+.msg-note .section-label { color: #e65100; }
+
+/* ── Citation blocks ────────────────────────────── */
 .msg-citation {
     font-size: 12px;
     background: #e3f2fd;
@@ -346,4 +389,28 @@ body {
     white-space: pre-wrap;
     max-height: 80px;
     overflow-y: auto;
+}
+
+/* ── Sidebar tooltip (Lỗi 8) ─────────────────────── */
+.chat-item {
+    position: relative;
+}
+
+.chat-title[title]:hover::after {
+    content: attr(title);
+    position: absolute;
+    left: 0;
+    top: 100%;
+    margin-top: 4px;
+    background: #111;
+    color: #fff;
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    z-index: 300;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
 }

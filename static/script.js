@@ -41,18 +41,52 @@ async function loadChatFromDB(chatId) {
     });
 }
 
-// Format assistant message: separate citation block from main body
+// Format assistant message: parse structured sections + citation block
 function formatAssistantHTML(text) {
     const parts = text.split(/\n*📖 Nguồn chính:/);
-    const body = parts[0].trim().replace(/\n/g, "<br>");
-    let html = `<div class="msg-body">${body}</div>`;
+    // Strip ** bold markers so they never appear in UI
+    const bodyText = parts[0].trim().replace(/\*\*/g, '');
+
+    // indexOf-based section extractor — more reliable than regex for Vietnamese
+    function getSection(label) {
+        const marker = label + ':';
+        const start = bodyText.indexOf(marker);
+        if (start === -1) return null;
+        const from = start + marker.length;
+        const siblings = ['Kết luận:', 'Phân tích:', 'Lưu ý:'];
+        let end = bodyText.length;
+        for (const m of siblings) {
+            if (m === marker) continue;
+            const i = bodyText.indexOf(m, from);
+            if (i !== -1 && i < end) end = i;
+        }
+        return bodyText.substring(from, end).trim() || null;
+    }
+
+    const conclusion = getSection('Kết luận');
+    const analysis   = getSection('Phân tích');
+    const note       = getSection('Lưu ý');
+
+    let html = '';
+    if (conclusion || analysis) {
+        if (conclusion)
+            html += `<div class="msg-section msg-conclusion"><span class="section-label">Kết luận</span>${conclusion.replace(/\n/g, '<br>')}</div>`;
+        if (analysis)
+            html += `<div class="msg-section msg-analysis"><span class="section-label">Phân tích</span>${analysis.replace(/\n/g, '<br>')}</div>`;
+        if (note)
+            html += `<div class="msg-section msg-note"><span class="section-label">Lưu ý</span>${note.replace(/\n/g, '<br>')}</div>`;
+    } else {
+        html = `<div class="msg-body">${bodyText.replace(/\n/g, '<br>')}</div>`;
+    }
+
+    // Citation blocks
     if (parts.length > 1) {
         const citationRaw = parts[1].trim();
         const citParts = citationRaw.split(/\n📎 Nguồn tham khảo:/);
-        const primary = citParts[0].trim().replace(/\n/g, "<br>");
+        const primary = citParts[0].trim().replace(/\n/g, '<br>');
         html += `<div class="msg-citation">📖 Nguồn chính: ${primary}</div>`;
         if (citParts.length > 1) {
-            const secondary = citParts[1].trim().replace(/\n/g, "<br>");
+            const secondary = citParts[1].trim().replace(/\n/g, '<br>');
             html += `<div class="msg-citation-secondary">📎 Nguồn tham khảo:<br>${secondary}</div>`;
         }
     }

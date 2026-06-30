@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>RAG Legal Assistant – Production Deployment Guide</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm 20mm 18mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.55;
+    color: #1a1a2e;
+    background: #fff;
+  }
+  /* Cover */
+  .cover {
+    text-align: center;
+    padding: 60px 20px 40px;
+    background: linear-gradient(135deg, #0f3460 0%, #16213e 60%, #1a1a2e 100%);
+    color: #fff;
+    border-radius: 4px;
+    margin-bottom: 28px;
+    page-break-after: always;
+  }
+  .cover h1 { font-size: 24pt; font-weight: 700; margin-bottom: 10px; letter-spacing: 1px; }
+  .cover .subtitle { font-size: 13pt; color: #a8d8ea; margin-bottom: 30px; }
+  .cover .badges { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin: 18px 0; }
+  .badge { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); border-radius: 20px; padding: 4px 14px; font-size: 9.5pt; }
+  .cover .meta { margin-top: 32px; font-size: 10pt; color: #a0aec0; }
+
+  /* TOC */
+  .toc { background: #f8faff; border: 1px solid #d0ddf5; border-radius: 6px; padding: 18px 22px; margin-bottom: 24px; }
+  .toc h2 { font-size: 12pt; color: #0f3460; margin-bottom: 10px; border-bottom: 2px solid #0f3460; padding-bottom: 4px; }
+  .toc ol { padding-left: 18px; }
+  .toc li { margin: 4px 0; font-size: 10.5pt; }
+  .toc a { color: #0f3460; text-decoration: none; }
+
+  /* Sections */
+  h1.section { font-size: 16pt; color: #0f3460; border-bottom: 3px solid #0f3460; padding-bottom: 5px; margin: 28px 0 14px; }
+  h2.section { font-size: 13pt; color: #16213e; border-left: 4px solid #e94560; padding-left: 10px; margin: 20px 0 10px; }
+  h3.section { font-size: 11pt; color: #0f3460; margin: 14px 0 7px; }
+
+  /* Alert boxes */
+  .alert { border-radius: 5px; padding: 10px 14px; margin: 12px 0; font-size: 10.5pt; }
+  .alert-danger  { background: #fff0f0; border-left: 4px solid #e94560; }
+  .alert-warning { background: #fffbea; border-left: 4px solid #f6ad55; }
+  .alert-info    { background: #ebf8ff; border-left: 4px solid #4299e1; }
+  .alert-success { background: #f0fff4; border-left: 4px solid #48bb78; }
+  .alert strong  { display: block; margin-bottom: 3px; }
+
+  /* Code blocks */
+  pre {
+    background: #1a1a2e;
+    color: #e2e8f0;
+    border-radius: 5px;
+    padding: 12px 15px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 9.5pt;
+    overflow-x: auto;
+    margin: 8px 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  code {
+    background: #edf2f7;
+    color: #c53030;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 9.5pt;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 10pt; }
+  th { background: #0f3460; color: #fff; padding: 7px 10px; text-align: left; }
+  td { padding: 6px 10px; border-bottom: 1px solid #e2e8f0; }
+  tr:nth-child(even) td { background: #f8faff; }
+
+  /* Steps */
+  .step { display: flex; gap: 12px; margin: 12px 0; align-items: flex-start; }
+  .step-num { background: #0f3460; color: #fff; border-radius: 50%; width: 24px; height: 24px; min-width: 24px; display: flex; align-items: center; justify-content: center; font-size: 10pt; font-weight: 700; }
+  .step-body { flex: 1; }
+
+  /* Page break helpers */
+  .page-break { page-break-before: always; }
+  .no-break { page-break-inside: avoid; }
+
+  /* Footer */
+  .footer { margin-top: 30px; text-align: center; font-size: 9pt; color: #718096; border-top: 1px solid #e2e8f0; padding-top: 10px; }
+
+  ul, ol { padding-left: 20px; margin: 6px 0; }
+  li { margin: 3px 0; }
+  p { margin: 6px 0; }
+  strong { color: #16213e; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════ COVER ══════════════════════════════════ -->
+<div class="cover">
+  <h1>RAG Legal Assistant</h1>
+  <div class="subtitle">Production Deployment Guide</div>
+  <div class="badges">
+    <span class="badge">FastAPI</span>
+    <span class="badge">ChromaDB</span>
+    <span class="badge">Groq LLM</span>
+    <span class="badge">SQLite</span>
+    <span class="badge">Python 3.10+</span>
+    <span class="badge">Uvicorn</span>
+  </div>
+  <div class="meta">
+    Project: <strong style="color:#a8d8ea">rag-legal-assistant-master</strong><br/>
+    Date: June 2026 &nbsp;|&nbsp; Author: BaoNHN
+  </div>
+</div>
+
+<!-- ══════════════════════════════════ TOC ══════════════════════════════════ -->
+<div class="toc">
+  <h2>Table of Contents</h2>
+  <ol>
+    <li><a href="#arch">System Architecture Overview</a></li>
+    <li><a href="#prereq">Server Requirements</a></li>
+    <li><a href="#security">Security Hardening (Critical)</a></li>
+    <li><a href="#install">Installation on Ubuntu Server</a></li>
+    <li><a href="#db">Database &amp; Vector Store Setup</a></li>
+    <li><a href="#systemd">Run as a System Service (systemd)</a></li>
+    <li><a href="#nginx">Nginx Reverse Proxy + HTTPS</a></li>
+    <li><a href="#docker">Docker Deployment (Alternative)</a></li>
+    <li><a href="#groq">Groq API Key Management</a></li>
+    <li><a href="#ngrok">Quick Demo with Ngrok</a></li>
+    <li><a href="#checklist">Production Checklist</a></li>
+    <li><a href="#troubleshoot">Troubleshooting</a></li>
+  </ol>
+</div>
+
+<!-- ══════════════════════════════════ 1. ARCH ══════════════════════════════════ -->
+<h1 class="section" id="arch">1. System Architecture Overview</h1>
+
+<p>This is a Vietnamese legal Q&amp;A chatbot built on a Retrieval-Augmented Generation (RAG) pipeline. The stack:</p>
+
+<table>
+  <tr><th>Component</th><th>Technology</th><th>Purpose</th></tr>
+  <tr><td>Web Framework</td><td>FastAPI + Uvicorn</td><td>HTTP API &amp; HTML interface</td></tr>
+  <tr><td>LLM</td><td>Groq API (llama-3.1-8b-instant)</td><td>Answer generation</td></tr>
+  <tr><td>Embeddings</td><td>BAAI/bge-small-en-v1.5 (HuggingFace)</td><td>Semantic search vectors</td></tr>
+  <tr><td>Vector DB</td><td>ChromaDB (local, persisted)</td><td>Law document retrieval</td></tr>
+  <tr><td>Chat DB</td><td>SQLite (chat.db)</td><td>Users, sessions, history</td></tr>
+  <tr><td>OCR</td><td>VietOCR + pdf2image + Poppler</td><td>PDF law document ingestion</td></tr>
+  <tr><td>Session</td><td>Starlette SessionMiddleware</td><td>Login state (cookie-based)</td></tr>
+</table>
+
+<div class="alert alert-info">
+  <strong>Architecture Flow</strong>
+  User → Nginx (HTTPS) → Uvicorn (FastAPI) → RAG Engine → ChromaDB + Groq API → Response
+</div>
+
+<!-- ══════════════════════════════════ 2. PREREQ ══════════════════════════════════ -->
+<h1 class="section" id="prereq">2. Server Requirements</h1>
+
+<h2 class="section">2.1 Minimum Hardware</h2>
+<table>
+  <tr><th>Resource</th><th>Minimum</th><th>Recommended</th></tr>
+  <tr><td>CPU</td><td>2 cores</td><td>4 cores</td></tr>
+  <tr><td>RAM</td><td>4 GB</td><td>8 GB (embedding model needs ~1–2 GB)</td></tr>
+  <tr><td>Disk</td><td>20 GB</td><td>50 GB (ChromaDB + model cache)</td></tr>
+  <tr><td>GPU</td><td>Not required</td><td>Optional – speeds up OCR with VietOCR</td></tr>
+</table>
+
+<h2 class="section">2.2 Software Prerequisites</h2>
+<ul>
+  <li>Ubuntu 22.04 LTS (or 20.04)</li>
+  <li>Python 3.10 or 3.11</li>
+  <li>pip 23+</li>
+  <li>Nginx (for reverse proxy)</li>
+  <li>Poppler utilities (for pdf2image)</li>
+  <li>Certbot (for free HTTPS via Let's Encrypt)</li>
+  <li>Internet access (to download HuggingFace model on first run)</li>
+</ul>
+
+<!-- ══════════════════════════════════ 3. SECURITY ══════════════════════════════════ -->
+<div class="page-break"></div>
+<h1 class="section" id="security">3. Security Hardening (Critical — Do Before Deploying)</h1>
+
+<div class="alert alert-danger">
+  <strong>⚠ These vulnerabilities MUST be fixed before going live:</strong>
+  The current code has several insecure defaults that are only safe for local development.
+</div>
+
+<h2 class="section">3.1 Change the Session Secret Key</h2>
+<p>In <code>app.py</code> line 20, the secret key is hardcoded as <code>"secret_key"</code>. Replace it with a strong random value:</p>
+<pre><code># Generate a secure key (run once in terminal):
+python -c "import secrets; print(secrets.token_hex(32))"
+
+# In app.py, replace:
+app.add_middleware(SessionMiddleware, secret_key="secret_key", max_age=7200)
+
+# With (use your generated value):
+app.add_middleware(SessionMiddleware, secret_key=os.environ["SESSION_SECRET"], max_age=7200)</code></pre>
+
+<h2 class="section">3.2 Move Groq API Key to Environment Variable</h2>
+<p>The file <code>groqkey.txt</code> should not be on disk in production. Move it to an environment variable:</p>
+<pre><code># In engine/rag_engine.py, replace the file-read block:
+# with open(..., "groqkey.txt") as f:
+#     GROQ_API_KEY = f.read().strip()
+
+# With:
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]</code></pre>
+<p>Then set it in your systemd service file or <code>.env</code> (see Section 6).</p>
+
+<h2 class="section">3.3 Hash Passwords in the Database</h2>
+<p>Passwords are currently stored in plaintext in SQLite. For production, use bcrypt:</p>
+<pre><code>pip install bcrypt
+
+# In database.py – hash on user creation:
+import bcrypt
+hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+# On login verification:
+bcrypt.checkpw(password.encode(), stored_hash.encode())</code></pre>
+
+<h2 class="section">3.4 Change Default Passwords</h2>
+<p>The seed accounts in <code>database.py</code> have weak passwords. Update them immediately after first run:</p>
+<table>
+  <tr><th>Account</th><th>Default Password</th><th>Action</th></tr>
+  <tr><td>testStudent1</td><td>123456P@ss</td><td>Change or delete</td></tr>
+  <tr><td>teacher1</td><td>Teacher@123</td><td>Change immediately</td></tr>
+</table>
+
+<h2 class="section">3.5 Restrict File Permissions</h2>
+<pre><code># On the server, restrict sensitive files:
+chmod 600 groqkey.txt
+chmod 600 chat.db
+chmod 700 chroma_db/</code></pre>
+
+<!-- ══════════════════════════════════ 4. INSTALL ══════════════════════════════════ -->
+<div class="page-break"></div>
+<h1 class="section" id="install">4. Installation on Ubuntu Server</h1>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-body">
+    <h3 class="section">Update system &amp; install dependencies</h3>
+<pre><code>sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3.11 python3.11-venv python3-pip \
+    git nginx poppler-utils \
+    libglib2.0-0 libsm6 libxrender1 libxext6</code></pre>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-body">
+    <h3 class="section">Clone the project</h3>
+<pre><code>cd /opt
+sudo git clone &lt;your-repo-url&gt; rag-legal-assistant
+sudo chown -R $USER:$USER /opt/rag-legal-assistant
+cd /opt/rag-legal-assistant</code></pre>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">3</div>
+  <div class="step-body">
+    <h3 class="section">Create virtual environment &amp; install Python packages</h3>
+<pre><code>python3.11 -m venv venv
+source venv/bin/activate
+
+# Install CPU-only PyTorch first (no GPU on most VPS):
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# Install all other dependencies:
+pip install -r requirements.txt</code></pre>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">4</div>
+  <div class="step-body">
+    <h3 class="section">Set environment variables</h3>
+<pre><code># Create /opt/rag-legal-assistant/.env  (never commit this file!)
+cat &gt; .env &lt;&lt;'EOF'
+GROQ_API_KEY=your_groq_api_key_here
+SESSION_SECRET=your_generated_secret_here
+EOF
+
+chmod 600 .env</code></pre>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">5</div>
+  <div class="step-body">
+    <h3 class="section">Build the ChromaDB vector store</h3>
+<pre><code># Upload your law documents first, then:
+source venv/bin/activate
+
+# From dataset (Excel):
+python database/build_db_from_dataset.py
+
+# OR from text files:
+python database/build_db_from_txt.py
+
+# OR from PDF files:
+python database/build_db_from_pdf.py</code></pre>
+    <div class="alert alert-warning">
+      <strong>Note:</strong> The HuggingFace embedding model (BAAI/bge-small-en-v1.5, ~130 MB) will be downloaded automatically on first run. Ensure internet access.
+    </div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">6</div>
+  <div class="step-body">
+    <h3 class="section">Test the app manually</h3>
+<pre><code>source venv/bin/activate
+export GROQ_API_KEY="your_key"
+export SESSION_SECRET="your_secret"
+uvicorn app:app --host 127.0.0.1 --port 8000
+# Open http://127.0.0.1:8000 to verify it works</code></pre>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════ 5. DB ══════════════════════════════════ -->
+<h1 class="section" id="db">5. Database &amp; Vector Store Setup</h1>
+
+<h2 class="section">5.1 File Locations</h2>
+<table>
+  <tr><th>File/Folder</th><th>Purpose</th><th>Notes</th></tr>
+  <tr><td><code>chat.db</code></td><td>SQLite – users, chats, messages</td><td>Auto-created on startup</td></tr>
+  <tr><td><code>chroma_db/</code></td><td>ChromaDB vector store</td><td>Build once with build_db_*.py</td></tr>
+  <tr><td><code>uploads_tmp/</code></td><td>Temporary PDF uploads</td><td>Auto-created; safe to clear</td></tr>
+  <tr><td><code>groqkey.txt</code></td><td>Groq API key (legacy)</td><td>Replace with env variable</td></tr>
+</table>
+
+<h2 class="section">5.2 Backup Strategy</h2>
+<pre><code># Backup SQLite database daily (cron):
+0 2 * * * cp /opt/rag-legal-assistant/chat.db /backups/chat_$(date +\%Y\%m\%d).db
+
+# Backup ChromaDB vector store weekly:
+0 3 * * 0 tar -czf /backups/chroma_$(date +\%Y\%m\%d).tar.gz /opt/rag-legal-assistant/chroma_db/</code></pre>
+
+<!-- ══════════════════════════════════ 6. SYSTEMD ══════════════════════════════════ -->
+<div class="page-break"></div>
+<h1 class="section" id="systemd">6. Run as a System Service (systemd)</h1>
+
+<p>This keeps the app running in the background, auto-restarts on crash, and starts on server reboot.</p>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-body">
+    <h3 class="section">Create the service file</h3>
+<pre><code>sudo nano /etc/systemd/system/rag-legal.service</code></pre>
+<pre><code>[Unit]
+Description=RAG Legal Assistant (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/rag-legal-assistant
+EnvironmentFile=/opt/rag-legal-assistant/.env
+ExecStart=/opt/rag-legal-assistant/venv/bin/uvicorn app:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 2 \
+    --log-level info
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-body">
+    <h3 class="section">Enable &amp; start the service</h3>
+<pre><code>sudo systemctl daemon-reload
+sudo systemctl enable rag-legal
+sudo systemctl start rag-legal
+
+# Check status:
+sudo systemctl status rag-legal
+
+# View logs:
+sudo journalctl -u rag-legal -f</code></pre>
+  </div>
+</div>
+
+<div class="alert alert-warning">
+  <strong>Workers note:</strong> ChromaDB and SQLite are not safe to share across multiple processes. Keep <code>--workers 1</code> unless you migrate to PostgreSQL + a networked vector store (Qdrant/Weaviate).
+</div>
+
+<!-- ══════════════════════════════════ 7. NGINX ══════════════════════════════════ -->
+<h1 class="section" id="nginx">7. Nginx Reverse Proxy + HTTPS</h1>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-body">
+    <h3 class="section">Create Nginx site config</h3>
+<pre><code>sudo nano /etc/nginx/sites-available/rag-legal</code></pre>
+<pre><code>server {
+    listen 80;
+    server_name yourdomain.com www.yourdomain.com;
+
+    # Redirect all HTTP → HTTPS
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name yourdomain.com www.yourdomain.com;
+
+    # SSL (managed by Certbot – see next step)
+    ssl_certificate     /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-Content-Type-Options "nosniff";
+    add_header X-XSS-Protection "1; mode=block";
+
+    # Increase upload limit for PDF files
+    client_max_body_size 50M;
+
+    # Proxy to FastAPI
+    location / {
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade $http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+    }
+
+    # Serve static files directly (better performance)
+    location /static/ {
+        alias /opt/rag-legal-assistant/static/;
+        expires 7d;
+    }
+}</code></pre>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-body">
+    <h3 class="section">Enable site &amp; get SSL certificate</h3>
+<pre><code>sudo ln -s /etc/nginx/sites-available/rag-legal /etc/nginx/sites-enabled/
+sudo nginx -t   # test config
+sudo systemctl reload nginx
+
+# Install Certbot and get free SSL:
+sudo apt install certbot python3-certbot-nginx -y
+sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com</code></pre>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">3</div>
+  <div class="step-body">
+    <h3 class="section">Auto-renew SSL certificate</h3>
+<pre><code># Certbot adds this automatically, verify with:
+sudo systemctl status certbot.timer
+
+# Test renewal manually:
+sudo certbot renew --dry-run</code></pre>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════ 8. DOCKER ══════════════════════════════════ -->
+<div class="page-break"></div>
+<h1 class="section" id="docker">8. Docker Deployment (Alternative)</h1>
+
+<p>If you prefer containerized deployment, create the following files in the project root:</p>
+
+<h2 class="section">8.1 Dockerfile</h2>
+<pre><code>FROM python:3.11-slim
+
+# Install system dependencies (poppler for pdf2image, libGL for OpenCV)
+RUN apt-get update && apt-get install -y \
+    poppler-utils libglib2.0-0 libsm6 libxrender1 libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install CPU PyTorch first (keeps image smaller than CUDA version)
+RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+# Pre-download the embedding model so container doesn't need internet at runtime
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
+
+EXPOSE 8000
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]</code></pre>
+
+<h2 class="section">8.2 docker-compose.yml</h2>
+<pre><code>version: "3.9"
+services:
+  rag-legal:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - SESSION_SECRET=${SESSION_SECRET}
+    volumes:
+      # Persist database and vector store outside the container
+      - ./chat.db:/app/chat.db
+      - ./chroma_db:/app/chroma_db
+      - ./uploads_tmp:/app/uploads_tmp
+    restart: unless-stopped</code></pre>
+
+<h2 class="section">8.3 Build &amp; Run</h2>
+<pre><code># Create .env file with your secrets:
+echo "GROQ_API_KEY=your_key_here" > .env
+echo "SESSION_SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >> .env
+
+# Build image (first time, takes 5–10 minutes):
+docker compose build
+
+# Start:
+docker compose up -d
+
+# View logs:
+docker compose logs -f
+
+# Stop:
+docker compose down</code></pre>
+
+<div class="alert alert-info">
+  <strong>Tip:</strong> With Docker you still need Nginx in front for HTTPS. Run Nginx on the host and proxy to <code>localhost:8000</code>, or use a Nginx container with <code>docker compose</code>.
+</div>
+
+<!-- ══════════════════════════════════ 9. GROQ ══════════════════════════════════ -->
+<h1 class="section" id="groq">9. Groq API Key Management</h1>
+
+<table>
+  <tr><th>Topic</th><th>Details</th></tr>
+  <tr><td>Get a key</td><td>Sign up at <strong>console.groq.com</strong> → API Keys → Create key</td></tr>
+  <tr><td>Free tier limits</td><td>~14,400 req/day, 6,000 tokens/min for llama-3.1-8b-instant</td></tr>
+  <tr><td>Rate limit handling</td><td>Already implemented in <code>_llm_invoke_with_retry()</code> – retries 3×</td></tr>
+  <tr><td>Model used</td><td><code>llama-3.1-8b-instant</code> – fast, cheap, suitable for Vietnamese legal Q&amp;A</td></tr>
+  <tr><td>Cost at scale</td><td>~$0.05 per 1M input tokens, ~$0.08 per 1M output tokens (as of 2025)</td></tr>
+</table>
+
+<div class="alert alert-warning">
+  <strong>Never commit your Groq API key to Git.</strong> Add <code>groqkey.txt</code> and <code>.env</code> to <code>.gitignore</code>.
+</div>
+
+<pre><code># .gitignore – add these lines:
+groqkey.txt
+.env
+chat.db
+chroma_db/
+uploads_tmp/
+__pycache__/
+venv/
+*.pyc</code></pre>
+
+<!-- ══════════════════════════════════ 10. NGROK ══════════════════════════════════ -->
+<h1 class="section" id="ngrok">10. Quick Demo with Ngrok (Not for Production)</h1>
+
+<p>The project already has <code>start_ngrok.py</code> for exposing the local server to the internet for demos. Use this only for testing — not production.</p>
+
+<pre><code># Install ngrok Python package:
+pip install ngrok
+
+# Make sure the app is running on port 8000 first:
+uvicorn app:app --host 127.0.0.1 --port 8000
+
+# In another terminal, start the tunnel:
+python start_ngrok.py
+# → Prints a public URL like: https://xxxx.ngrok-free.app</code></pre>
+
+<div class="alert alert-danger">
+  <strong>⚠ Ngrok limitations:</strong> The token in <code>start_ngrok.py</code> is hardcoded and publicly visible in your repo. Rotate it at <strong>dashboard.ngrok.com</strong> immediately. Free tier URLs change on every restart. Do not use for real users.
+</div>
+
+<!-- ══════════════════════════════════ 11. CHECKLIST ══════════════════════════════════ -->
+<div class="page-break"></div>
+<h1 class="section" id="checklist">11. Production Checklist</h1>
+
+<table>
+  <tr><th>Category</th><th>Item</th><th>Status</th></tr>
+  <tr><td rowspan="4"><strong>Security</strong></td><td>Session secret moved to environment variable</td><td>☐</td></tr>
+  <tr><td>Groq API key moved to environment variable</td><td>☐</td></tr>
+  <tr><td>Default passwords changed (testStudent1, teacher1)</td><td>☐</td></tr>
+  <tr><td>groqkey.txt and .env added to .gitignore</td><td>☐</td></tr>
+  <tr><td rowspan="3"><strong>Infrastructure</strong></td><td>Nginx configured with HTTPS (Let's Encrypt)</td><td>☐</td></tr>
+  <tr><td>systemd service created and enabled</td><td>☐</td></tr>
+  <tr><td>Firewall configured (only ports 80, 443, 22)</td><td>☐</td></tr>
+  <tr><td rowspan="3"><strong>Data</strong></td><td>ChromaDB vector store built from law documents</td><td>☐</td></tr>
+  <tr><td>Database backup cron job configured</td><td>☐</td></tr>
+  <tr><td>uploads_tmp/ directory write-permission set</td><td>☐</td></tr>
+  <tr><td rowspan="2"><strong>Testing</strong></td><td>Login as student and ask a legal question – works?</td><td>☐</td></tr>
+  <tr><td>Login as teacher and import a PDF – works?</td><td>☐</td></tr>
+  <tr><td rowspan="2"><strong>Monitoring</strong></td><td>journalctl / logs accessible</td><td>☐</td></tr>
+  <tr><td>Groq API rate limit alerts set up (optional)</td><td>☐</td></tr>
+</table>
+
+<!-- ══════════════════════════════════ 12. TROUBLESHOOT ══════════════════════════════════ -->
+<h1 class="section" id="troubleshoot">12. Troubleshooting</h1>
+
+<table>
+  <tr><th>Problem</th><th>Likely Cause</th><th>Fix</th></tr>
+  <tr><td><code>ModuleNotFoundError: vietocr</code></td><td>vietocr requires torch to be installed first</td><td>Run <code>pip install torch</code> before <code>pip install -r requirements.txt</code></td></tr>
+  <tr><td><code>pdf2image.exceptions.PDFInfoNotInstalledError</code></td><td>Poppler not installed on Linux</td><td><code>sudo apt install poppler-utils</code></td></tr>
+  <tr><td><code>chroma_db not found</code></td><td>Vector store was not built yet</td><td>Run <code>python database/build_db_from_dataset.py</code></td></tr>
+  <tr><td>Groq <code>429 Too Many Requests</code></td><td>Rate limit exceeded</td><td>The app retries automatically; upgrade Groq plan for higher limits</td></tr>
+  <tr><td>Session lost on restart</td><td>Session secret changes between restarts</td><td>Set a fixed <code>SESSION_SECRET</code> env variable (not random each time)</td></tr>
+  <tr><td>App slow to start</td><td>HuggingFace model downloading (first run)</td><td>Pre-download model with: <code>python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"</code></td></tr>
+  <tr><td>Nginx 502 Bad Gateway</td><td>FastAPI not running or wrong port</td><td>Check <code>sudo systemctl status rag-legal</code> and that port 8000 is listening</td></tr>
+  <tr><td>File upload fails (&gt;1MB)</td><td>Nginx default body size limit</td><td>Add <code>client_max_body_size 50M;</code> to Nginx config</td></tr>
+</table>
+
+<h2 class="section">Useful Commands</h2>
+<pre><code># View live app logs:
+sudo journalctl -u rag-legal -f
+
+# Restart the app:
+sudo systemctl restart rag-legal
+
+# Test if app is running on port 8000:
+curl http://127.0.0.1:8000/
+
+# Check Nginx errors:
+sudo tail -f /var/log/nginx/error.log
+
+# Check open ports:
+ss -tlnp | grep 8000</code></pre>
+
+<!-- ══════════════════════════════════ FOOTER ══════════════════════════════════ -->
+<div class="footer">
+  RAG Legal Assistant – Production Deployment Guide &nbsp;|&nbsp; Project by BaoNHN &nbsp;|&nbsp; June 2026<br/>
+  Stack: FastAPI · ChromaDB · Groq LLM (llama-3.1-8b-instant) · HuggingFace Embeddings · SQLite · Nginx
+</div>
+
+</body>
+</html>

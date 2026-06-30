@@ -147,6 +147,9 @@ def extract_topic_from_question(question: str) -> str | None:
         r'quy định về (.+?) gồm',
         r'về (.+?) là gì',
         r'(.+?) là gì theo Luật',
+        r'^(.+?) là gì\??$',          # bare "X là gì?" with no prefix
+        r'^(.+?) được hiểu là gì\??$',
+        r'^(.+?) có nghĩa là gì\??$',
     ]
     for p in patterns:
         m = re.search(p, q, re.IGNORECASE)
@@ -343,14 +346,21 @@ Tài liệu:
 Câu hỏi: {question}
 
 """
+    STRUCT = (
+        "\n\nTrả lời theo đúng cấu trúc sau (bắt buộc, mỗi mục một dòng riêng):\n"
+        "**Kết luận:** [1 câu trả thẳng câu hỏi]\n"
+        "**Phân tích:** [2-3 câu giải thích ngắn]\n"
+        "**Lưu ý:** [1 điểm đặc biệt cần nhớ, bỏ dòng này nếu không có]\n"
+        "Tổng cộng tối đa 200 từ. Không viết gì ngoài 3 mục trên."
+    )
     if q_type == "procedure":
-        base += "Trả lời dạng các bước ngắn gọn (1, 2, 3...). Tối đa 200 từ."
+        base += "Trong **Phân tích**, liệt kê các bước theo thứ tự (1, 2, 3...)." + STRUCT
     elif q_type == "condition":
-        base += "Liệt kê ngắn gọn các điều kiện/yêu cầu. Tối đa 200 từ."
+        base += "Trong **Phân tích**, liệt kê ngắn gọn từng điều kiện." + STRUCT
     elif q_type == "definition":
-        base += "Trả lời ngắn gọn định nghĩa, nêu rõ căn cứ điều luật. Tối đa 200 từ."
+        base += "Trong **Kết luận**, nêu định nghĩa. Trong **Phân tích**, giải thích chi tiết." + STRUCT
     else:
-        base += "Trả lời ngắn gọn, đúng trọng tâm, nêu CĂN CỨ PHÁP LÝ. Tối đa 200 từ."
+        base += STRUCT
     return base
 
 
@@ -386,10 +396,10 @@ def build_citation(meta: dict, answer: str = "", secondary_docs=None) -> str:
         parts.append(line)
 
     law_name = f"{loai} {so_ky_hieu}".strip()
-    if "67/VBHN" in so_ky_hieu or "67/VBHN" in law_name:
+    # Always cite the consolidated text (67/VBHN-VPQH 2025) for Enterprise Law
+    if ("67/VBHN" in so_ky_hieu or "59/2020" in so_ky_hieu or
+            "67/VBHN" in law_name or "59/2020" in law_name):
         law_name = "Văn bản hợp nhất Luật Doanh nghiệp số 67/VBHN-VPQH năm 2025"
-    elif "59/2020" in so_ky_hieu or "59/2020" in law_name:
-        law_name = "Luật Doanh nghiệp số 59/2020/QH14"
     if law_name:
         parts.append(law_name)
 
@@ -414,10 +424,8 @@ def build_citation(meta: dict, answer: str = "", secondary_docs=None) -> str:
                 continue
             seen_refs.add(s_article)
 
-            if "67/VBHN" in s_ky_hieu:
-                s_law = "VBHN 67/VBHN-VPQH"
-            elif "59/2020" in s_ky_hieu:
-                s_law = "LDN 59/2020/QH14"
+            if "67/VBHN" in s_ky_hieu or "59/2020" in s_ky_hieu:
+                s_law = "VBHN 67/VBHN-VPQH 2025"
             else:
                 s_law = s_ky_hieu[:20] if s_ky_hieu else ""
 

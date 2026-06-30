@@ -211,51 +211,82 @@ def _extract_text_pdf(pdf_path: str, total_pages: int):
     return pages_text if avg_chars >= _MIN_CHARS_PER_PAGE else None
 
 
+def _extract_text_docx(docx_path: str) -> dict:
+    """Extract text from a .docx Word document. Returns {1: full_text}."""
+    from docx import Document as DocxDoc
+    doc = DocxDoc(docx_path)
+
+    lines = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            lines.append(text)
+
+    # Also pull text from tables (law docs often have tabular articles)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                text = cell.text.strip()
+                if text and text not in lines:
+                    lines.append(text)
+
+    return {1: "\n".join(lines)}
+
+
 # ── Main background job ───────────────────────────────────────────────────────
-def run_import(job_id: str, pdf_path: str, so_ky_hieu: str,
+def run_import(job_id: str, file_path: str, so_ky_hieu: str,
                loai_van_ban: str, nguon_thu_thap: str,
                student_id: int, db_conn_factory):
     """
-    Full pipeline: auto-detect PDF type → extract text or OCR →
+    Full pipeline: auto-detect file type (PDF / DOCX) → extract text or OCR →
     segment → embed → add to ChromaDB (no wipe).
     """
-    _set_job(job_id, status="running", message="Kiểm tra loại PDF…")
+    ext = os.path.splitext(file_path)[1].lower()
+    _set_job(job_id, status="running", message="Kiểm tra loại file…")
 
     try:
-        reader = PdfReader(pdf_path)
-        total_pages = len(reader.pages)
-
-        # ── 1. Try direct text extraction first ──
-        all_text_by_page = _extract_text_pdf(pdf_path, total_pages)
-
-        if all_text_by_page:
-            _set_job(job_id, message=f"PDF văn bản số ({total_pages} trang). Trích xuất hoàn tất.")
+        if ext == ".docx":
+            # ── DOCX: direct text extraction, no OCR needed ──
+            _set_job(job_id, message="File Word (.docx) — đang trích xuất văn bản…")
+            all_text_by_page = _extract_text_docx(file_path)
+            total_pages = 1
+            _set_job(job_id, message=f"Trích xuất DOCX hoàn tất ({len(all_text_by_page[1]):,} ký tự).")
         else:
-            # ── 2. Fall back to VietOCR for scanned PDFs ──
-            _set_job(job_id, message="PDF scan — đang khởi động VietOCR…")
-            device = _detect_device()
-            cfg = Cfg.load_config_from_name('vgg_transformer')
-            cfg['device'] = device
-            cfg['predictor']['beamsearch'] = True
-            detector = Predictor(cfg)
-            _set_job(job_id, message=f"VietOCR loaded ({device.upper()}). Bắt đầu OCR…")
+            # ── PDF: try direct text, fall back to OCR ──
+            reader = PdfReader(file_path)
+            total_pages = len(reader.pages)
 
-            all_text_by_page = {}
-            BATCH = 5
-            DPI = 250
+            # ── 1. Try direct text extraction first ──
+            all_text_by_page = _extract_text_pdf(file_path, total_pages)
 
-            for batch_start in range(1, total_pages + 1, BATCH):
-                batch_end = min(batch_start + BATCH - 1, total_pages)
-                _set_job(job_id, message=f"OCR trang {batch_start}–{batch_end}/{total_pages}…")
+            if all_text_by_page:
+                _set_job(job_id, message=f"PDF văn bản số ({total_pages} trang). Trích xuất hoàn tất.")
+            else:
+                # ── 2. Fall back to VietOCR for scanned PDFs ──
+                _set_job(job_id, message="PDF scan — đang khởi động VietOCR…")
+                device = _detect_device()
+                cfg = Cfg.load_config_from_name('vgg_transformer')
+                cfg['device'] = device
+                cfg['predictor']['beamsearch'] = True
+                detector = Predictor(cfg)
+                _set_job(job_id, message=f"VietOCR loaded ({device.upper()}). Bắt đầu OCR…")
 
-                kwargs = dict(dpi=DPI, first_page=batch_start, last_page=batch_end, fmt='jpeg')
-                if os.path.isdir(POPPLER_PATH):
-                    kwargs['poppler_path'] = POPPLER_PATH
+                all_text_by_page = {}
+                BATCH = 5
+                DPI = 250
 
-                pages = convert_from_path(pdf_path, **kwargs)
-                for i, pg in enumerate(pages):
-                    all_text_by_page[batch_start + i] = _ocr_page(detector, pg)
-                del pages
+                for batch_start in range(1, total_pages + 1, BATCH):
+                    batch_end = min(batch_start + BATCH - 1, total_pages)
+                    _set_job(job_id, message=f"OCR trang {batch_start}–{batch_end}/{total_pages}…")
+
+                    kwargs = dict(dpi=DPI, first_page=batch_start, last_page=batch_end, fmt='jpeg')
+                    if os.path.isdir(POPPLER_PATH):
+                        kwargs['poppler_path'] = POPPLER_PATH
+
+                    pages = convert_from_path(file_path, **kwargs)
+                    for i, pg in enumerate(pages):
+                        all_text_by_page[batch_start + i] = _ocr_page(detector, pg)
+                    del pages
 
         # ── 3. Save raw text ──
         raw_txt = os.path.join(BASE_DIR, f"{so_ky_hieu.replace('/', '_')}_{nguon_thu_thap.replace(' ', '_')}.txt")
@@ -326,9 +357,9 @@ def run_import(job_id: str, pdf_path: str, so_ky_hieu: str,
             upsert_import_chat(student_id, msg)
         except Exception:
             pass
-        # Cleanup temp PDF
+        # Cleanup temp file
         try:
-            if os.path.exists(pdf_path):
-                os.remove(pdf_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
         except Exception:
             pass
