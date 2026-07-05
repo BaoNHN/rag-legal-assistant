@@ -288,6 +288,22 @@ async def list_datasets_route(request: Request):
     return list_available_datasets()
 
 
+@app.get("/download_dataset_example")
+async def download_dataset_example_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return RedirectResponse("/", status_code=302)
+
+    file_path = os.path.join(BASE_DIR, "Dataset", "example_sheet.xlsx")
+    if not os.path.exists(file_path):
+        return JSONResponse({"status": "error", "message": "Không tìm thấy file mẫu"}, status_code=404)
+
+    return StreamingResponse(
+        open(file_path, "rb"),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=example_sheet.xlsx"},
+    )
+
+
 @app.post("/evaluate")
 async def evaluate_route(
     request: Request,
