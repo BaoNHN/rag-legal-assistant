@@ -12,10 +12,30 @@ python database/build_db_from_txt.py // cho ocr_raw_output tạo ra sau khi ch�
 //Build ChromaDB from curated dataset (fast, no OCR needed!)
 python database/build_db_from_dataset.py
 
+// Build ChromaDB từ dataset 200-updated (KB_Articles_Updated + Legal_Update_2025 + Dataset_200)
+// Cần file enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx ở thư mục gốc
+python database/build_db_from_dataset_updated.py
+
 # 2. Quick evaluation on 30 demo questions for curated dataset
 python evaluate/evaluate_rag.py --mode auto --split demo
 # 3. Full evaluation with LLM scoring for curated dataset
 python evaluate/evaluate_rag.py --mode llm --split test
+
+// Evaluation mới (dùng engine, có progress + lưu Excel kết quả)
+// Quick: 30 câu, auto mode (nhanh, offline)
+python engine/evaluate_engine.py --mode auto --split demo
+// Full: toàn bộ dataset, LLM mode (cần groqkey.txt)
+python engine/evaluate_engine.py --mode llm --split all
+// Test set only, auto mode
+python engine/evaluate_engine.py --mode auto --split test
+
+// Import file PDF / DOCX có text (không cần OCR)
+// --so-ky-hieu : mã văn bản   --loai : loại văn bản   --nguon : nguồn
+// Nếu so_ky_hieu đã tồn tại trong DB sẽ tự skip (thêm --force để ghi đè)
+python database/build_db_doc.py "67_VBHN-VPQH_671127 (1).docx" --so-ky-hieu "67/VBHN-VPQH" --loai "Van ban hop nhat" --nguon "vbpl.vn"
+python database/build_db_doc.py "2025_1107 + 1108_67-VBHN-VPQH.pdf" --so-ky-hieu "67/VBHN-VPQH-2025" --loai "Van ban hop nhat" --nguon "chinhphu.vn"
+// Ghi đè nếu muốn import lại
+python database/build_db_doc.py "ten_file.pdf" --so-ky-hieu "XX/YYYY" --loai "Luat" --nguon "vbpl.vn" --force
 
 // chạy chương trình
 python app.py

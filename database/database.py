@@ -21,14 +21,21 @@ def init_db():
 
     # ── users table (replaces students + teachers)
     # role: 0 = student, 1 = teacher, 2 = admin (extensible)
+    # status: 0 = active, 1 = disabled (login restricted)
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id   INTEGER PRIMARY KEY AUTOINCREMENT,
             user_name TEXT UNIQUE,
             password  TEXT,
-            role      INTEGER DEFAULT 0
+            role      INTEGER DEFAULT 0,
+            status    INTEGER DEFAULT 0
         )
     """)
+    # Migration for existing DBs missing status column
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN status INTEGER DEFAULT 0")
+    except Exception:
+        pass
 
     # ── chats
     # role: 0 = student chat, 1 = teacher chat
@@ -98,6 +105,10 @@ def init_db():
             "INSERT INTO users (user_name, password, role) VALUES (?,?,?)",
             ("teacher1", "Teacher@123", 1)
         )
+        c.execute(
+            "INSERT INTO users (user_name, password, role) VALUES (?,?,?)",
+            ("admin1", "Admin@123", 2)
+        )
 
     conn.commit()
     conn.close()
@@ -106,16 +117,24 @@ def init_db():
 # =========================
 # LOGIN
 # =========================
+ROLE_NAMES = {0: "Student", 1: "Teacher", 2: "Admin"}
+
+
+def role_name(role: int) -> str:
+    return ROLE_NAMES.get(int(role), "Student")
+
+
 def login_user(username: str, password: str):
     """
-    Returns dict: {user_id, user_name, user_type, role}
-    role: 0=student, 1=teacher
-    user_type: 'student' | 'teacher'
-    Returns None if not found.
+    Returns dict: {user_id, user_name, user_type, role} on success.
+    Returns {"disabled": True} if credentials match a disabled account.
+    Returns None if credentials don't match any account.
+    role: 0=student, 1=teacher, 2=admin
+    user_type: 'student' | 'teacher' | 'admin'
     """
     conn = sqlite3.connect(DB_NAME)
     row  = conn.execute(
-        "SELECT user_id, role FROM users WHERE user_name=? AND password=?",
+        "SELECT user_id, role, status FROM users WHERE user_name=? AND password=?",
         (username, password)
     ).fetchone()
     conn.close()
@@ -123,8 +142,12 @@ def login_user(username: str, password: str):
     if not row:
         return None
 
-    role      = int(row[1])
-    user_type = "teacher" if role >= 1 else "student"
+    role   = int(row[1])
+    status = int(row[2] or 0)
+    if status == 1:
+        return {"disabled": True}
+
+    user_type = "admin" if role == 2 else ("teacher" if role == 1 else "student")
     return {
         "user_id":   row[0],
         "user_name": username,
@@ -232,3 +255,101 @@ def upsert_import_chat(user_id: int, message: str):
     )
     conn.commit()
     conn.close()
+
+
+# =========================
+# ACCOUNT MANAGEMENT (admin)
+# =========================
+def get_all_users():
+    """Returns list of {user_id, user_name, role, role_name, status} ordered by user_id."""
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute("SELECT user_id, user_name, role, status FROM users ORDER BY user_id ASC")
+    rows = c.fetchall()
+    conn.close()
+    return [
+        {
+            "user_id":   r[0],
+            "user_name": r[1],
+            "role":      int(r[2]),
+            "role_name": role_name(r[2]),
+            "status":    int(r[3] or 0),
+        }
+        for r in rows
+    ]
+
+
+def set_user_status(user_id: int, status: int):
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute("UPDATE users SET status=? WHERE user_id=?", (status, user_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_user(user_id: int):
+    """Deletes a user, all their chats (student + teacher role chats) and messages."""
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute("SELECT id FROM chats WHERE student_id=?", (user_id,))
+    chat_ids = [r[0] for r in c.fetchall()]
+    for chat_id in chat_ids:
+        c.execute("DELETE FROM messages WHERE chat_id=?", (chat_id,))
+    c.execute("DELETE FROM chats WHERE student_id=?", (user_id,))
+    c.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def create_user(user_name: str, password: str, role: int):
+    """Creates a new user. Returns True if created, False if user_name already exists."""
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    try:
+        c.execute(
+            "INSERT INTO users (user_name, password, role, status) VALUES (?,?,?,0)",
+            (user_name, password, role)
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def get_user_by_name(username: str):
+    conn = sqlite3.connect(DB_NAME)
+    row  = conn.execute(
+        "SELECT user_id, user_name, password, role, status FROM users WHERE user_name=?",
+        (username,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "user_id":   row[0],
+        "user_name": row[1],
+        "password":  row[2],
+        "role":      int(row[3]),
+        "status":    int(row[4] or 0),
+    }
+
+
+def change_user_password(username: str, old_password: str, new_password: str):
+    """
+    Verifies old_password against DB then updates to new_password.
+    Returns (True, "") on success, or (False, reason) on failure.
+    """
+    user = get_user_by_name(username)
+    if not user:
+        return False, "Tài khoản không tồn tại"
+    if user["password"] != old_password:
+        return False, "Mật khẩu cũ không đúng"
+
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute("UPDATE users SET password=? WHERE user_name=?", (new_password, username))
+    conn.commit()
+    conn.close()
+    return True, ""

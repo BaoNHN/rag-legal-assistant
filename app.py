@@ -1,10 +1,12 @@
 from fastapi import FastAPI, Request, Form, File, UploadFile, BackgroundTasks, Query
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 import os
+import re
 import uuid
+import io
 
 from engine.rag_engine import ask_rag
 from database.database import (
@@ -12,9 +14,16 @@ from database.database import (
     login_user,
     create_chat, get_all_chats,
     save_message, get_messages,
-    rename_chat, delete_chat
+    rename_chat, delete_chat,
+    get_all_users, set_user_status, delete_user,
+    change_user_password,
 )
 from engine.import_law_engine import run_import, get_job
+from engine.import_dataset_engine import run_import_dataset, get_dataset_job
+from engine.evaluate_engine import run_evaluation, get_eval_job, list_available_datasets
+from engine.import_account_engine import run_import_accounts, build_template_bytes
+
+PASSWORD_RE = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$')
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key="secret_key", max_age=7200)
@@ -34,7 +43,11 @@ def logged_in(request: Request) -> bool:
     return "user_id" in request.session
 
 def is_teacher(request: Request) -> bool:
-    return request.session.get("user_type") == "teacher"
+    # Admins have all Teacher-role functionality too.
+    return request.session.get("role", 0) in (1, 2)
+
+def is_admin(request: Request) -> bool:
+    return request.session.get("role", 0) == 2
 
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
@@ -42,7 +55,10 @@ def is_teacher(request: Request) -> bool:
 async def home(request: Request):
     if not logged_in(request):
         return templates.TemplateResponse(request, "login.html")
-    return templates.TemplateResponse(request, "index.html", {"is_teacher": is_teacher(request)})
+    return templates.TemplateResponse(request, "index.html", {
+        "is_teacher": is_teacher(request),
+        "is_admin":   is_admin(request),
+    })
 
 
 @app.get("/import", response_class=HTMLResponse)
@@ -50,6 +66,20 @@ async def import_page(request: Request):
     if not logged_in(request) or not is_teacher(request):
         return RedirectResponse("/", status_code=302)
     return templates.TemplateResponse(request, "import_law.html")
+
+
+@app.get("/manage_accounts", response_class=HTMLResponse)
+async def manage_accounts_page(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return RedirectResponse("/", status_code=302)
+    return templates.TemplateResponse(request, "manage_accounts.html")
+
+
+@app.get("/import_account", response_class=HTMLResponse)
+async def import_account_page(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return RedirectResponse("/", status_code=302)
+    return templates.TemplateResponse(request, "import_account.html")
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -60,6 +90,11 @@ async def login(request: Request):
     password = data.get("password", "")
 
     user = login_user(username, password)
+    if user and user.get("disabled"):
+        return JSONResponse(
+            {"status": "fail", "message": "Tài khoản đã bị vô hiệu hóa."},
+            status_code=403
+        )
     if user:
         request.session["user_id"]   = user["user_id"]
         request.session["user_type"] = user["user_type"]
@@ -199,6 +234,215 @@ async def import_law(
 async def import_status(job_id: str):
     job = get_job(job_id)
     return job if job else {"status": "unknown"}
+
+
+# ── Import dataset (Excel) ─────────────────────────────────────────────────────
+@app.post("/import_dataset")
+async def import_dataset_route(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    dataset_file: UploadFile = File(None),
+):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    if not dataset_file:
+        return JSONResponse(
+            {"status": "error", "message": "Vui lòng tải lên file dataset (.xlsx)"},
+            status_code=400,
+        )
+
+    fname = (dataset_file.filename or "").lower()
+    if not fname.endswith(".xlsx"):
+        return JSONResponse(
+            {"status": "error", "message": "Chỉ chấp nhận file .xlsx"},
+            status_code=400,
+        )
+
+    job_id    = str(uuid.uuid4())
+    file_path = os.path.join(UPLOAD_DIR, f"{job_id}.xlsx")
+    content   = await dataset_file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    background_tasks.add_task(
+        run_import_dataset,
+        job_id=job_id,
+        file_path=file_path,
+        original_filename=dataset_file.filename,
+    )
+    return {"status": "ok", "job_id": job_id, "message": "Đang xử lý dataset…"}
+
+
+@app.get("/import_dataset_status/{job_id}")
+async def import_dataset_status(job_id: str):
+    job = get_dataset_job(job_id)
+    return job if job else {"status": "unknown"}
+
+
+# ── Evaluate RAG ──────────────────────────────────────────────────────────────
+@app.get("/list_datasets")
+async def list_datasets_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return list_available_datasets()
+
+
+@app.post("/evaluate")
+async def evaluate_route(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data         = await request.json()
+    mode         = data.get("mode", "auto")
+    split        = data.get("split", "demo")
+    dataset_file = data.get("dataset_file") or None
+
+    if mode not in ("auto", "llm"):
+        mode = "auto"
+    if split not in ("demo", "all", "test"):
+        split = "demo"
+
+    job_id = str(uuid.uuid4())
+    background_tasks.add_task(run_evaluation, job_id=job_id, mode=mode, split=split, dataset_file=dataset_file)
+    return {"status": "ok", "job_id": job_id}
+
+
+@app.get("/evaluate_status/{job_id}")
+async def evaluate_status_route(job_id: str):
+    job = get_eval_job(job_id)
+    return job if job else {"status": "unknown"}
+
+
+@app.get("/download_eval_result/{filename}")
+async def download_eval_result_route(request: Request, filename: str):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    safe_name = os.path.basename(filename)
+    if not re.match(r'^eval_results_.*\.xlsx$', safe_name):
+        return JSONResponse({"status": "error", "message": "Tên file không hợp lệ"}, status_code=400)
+
+    file_path = os.path.join(BASE_DIR, safe_name)
+    if not os.path.exists(file_path):
+        return JSONResponse({"status": "error", "message": "Không tìm thấy file kết quả"}, status_code=404)
+
+    return StreamingResponse(
+        open(file_path, "rb"),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={safe_name}"},
+    )
+
+
+# ── Account management (admin) ─────────────────────────────────────────────────
+@app.get("/list_users")
+async def list_users_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return get_all_users()
+
+
+@app.post("/toggle_user_status")
+async def toggle_user_status_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data    = await request.json()
+    user_id = data.get("user_id")
+    status  = data.get("status")
+    if user_id is None or status not in (0, 1):
+        return JSONResponse({"status": "error", "message": "Thiếu tham số"}, status_code=400)
+    if int(user_id) == request.session.get("user_id"):
+        return JSONResponse({"status": "error", "message": "Không thể tự vô hiệu hóa tài khoản của chính mình."}, status_code=400)
+
+    set_user_status(user_id, status)
+    return {"status": "ok"}
+
+
+@app.post("/delete_user")
+async def delete_user_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data    = await request.json()
+    user_id = data.get("user_id")
+    if user_id is None:
+        return JSONResponse({"status": "error", "message": "Thiếu user_id"}, status_code=400)
+    if int(user_id) == request.session.get("user_id"):
+        return JSONResponse({"status": "error", "message": "Không thể tự xoá tài khoản của chính mình."}, status_code=400)
+
+    delete_user(user_id)
+    return {"status": "ok"}
+
+
+@app.post("/import_account")
+async def import_account_route(
+    request: Request,
+    account_file: UploadFile = File(None),
+):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    if not account_file or not (account_file.filename or "").lower().endswith(".xlsx"):
+        return JSONResponse({"status": "error", "message": "Chỉ chấp nhận file .xlsx"}, status_code=400)
+
+    job_id    = str(uuid.uuid4())
+    file_path = os.path.join(UPLOAD_DIR, f"{job_id}.xlsx")
+    content   = await account_file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    try:
+        report = run_import_accounts(file_path)
+    finally:
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
+
+    status_code = 200 if report.get("status") == "ok" else 400
+    return JSONResponse(report, status_code=status_code)
+
+
+@app.get("/download_account_template")
+async def download_account_template(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return RedirectResponse("/", status_code=302)
+
+    content = build_template_bytes()
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=account_import_template.xlsx"},
+    )
+
+
+# ── Change password (public, from login page) ──────────────────────────────────
+@app.post("/change_password")
+async def change_password_route(request: Request):
+    data             = await request.json()
+    username         = (data.get("username") or "").strip()
+    old_password     = data.get("old_password") or ""
+    new_password     = data.get("new_password") or ""
+    confirm_password = data.get("confirm_password") or ""
+
+    if not username or not old_password or not new_password or not confirm_password:
+        return JSONResponse({"status": "error", "message": "Vui lòng điền đầy đủ tất cả các trường."}, status_code=400)
+    if new_password != confirm_password:
+        return JSONResponse({"status": "error", "message": "Mật khẩu mới và xác nhận mật khẩu không khớp."}, status_code=400)
+    if not PASSWORD_RE.match(new_password):
+        return JSONResponse({
+            "status": "error",
+            "message": "Mật khẩu mới cần tối thiểu 8 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt."
+        }, status_code=400)
+
+    ok, reason = change_user_password(username, old_password, new_password)
+    if not ok:
+        return JSONResponse({"status": "error", "message": reason}, status_code=400)
+    return {"status": "ok", "message": "Đổi mật khẩu thành công."}
 
 
 if __name__ == "__main__":

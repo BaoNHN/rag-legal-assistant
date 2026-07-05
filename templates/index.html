@@ -31,6 +31,29 @@
     }
     .btn-import-law.visible { display: block; }
 
+    .btn-manage-account {
+      display: none;
+      width: 90%;
+      margin-right: 30px;
+      margin-top: 8px;
+      padding: 9px 10px;
+      border: 1.5px solid rgb(16 15 15 / 0.5);
+      background: #343541;
+      color: white;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      text-align: center;
+      transition: all .18s;
+      text-decoration: none;
+    }
+    .btn-manage-account:hover {
+      background: #40414a;
+      border-color: #D63B3B;
+    }
+    .btn-manage-account.visible { display: block; }
+
     /* Role badge in sidebar */
     .role-badge {
       display: inline-block;
@@ -46,6 +69,11 @@
       color: #E8A020;
       border: 1.5px solid #E8A020;
     }
+    .role-badge.admin {
+      background: whitesmoke;
+      color: #D63B3B;
+      border: 1.5px solid #D63B3B;
+    }
   </style>
 </head>
 <body>
@@ -54,9 +82,13 @@
   <aside class="sidebar">
     <div class="sidebar-header">
       <button class="new-chat">+ New Chat</button>
-      <!-- Import Law button — shown only for teachers via JS -->
+      <!-- Import Law button — shown for teachers & admins via JS -->
       <a href="/import" class="btn-import-law" id="importLawBtn">
         📥 Import Law
+      </a>
+      <!-- Manage Account button — shown only for admins via JS -->
+      <a href="/manage_accounts" class="btn-manage-account" id="manageAccountBtn">
+        👤 Manage Account
       </a>
     </div>
     <div class="sidebar-chats" id="chat-list"></div>
@@ -103,14 +135,20 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/material-design-icons/3.0.1/iconfont/material-icons.css"/>
 <script src="/static/script.js"></script>
 <script>
-// Show Import Law button and role badge if teacher
+// Show Import Law / Manage Account buttons and role badge based on role
 (async function() {
   try {
     const res  = await fetch("/session_info");
     const data = await res.json();
-    if (data.user_type === "teacher") {
+    const badge = document.getElementById("roleBadge");
+
+    if (data.user_type === "teacher" || data.user_type === "admin") {
       document.getElementById("importLawBtn").classList.add("visible");
-      const badge = document.getElementById("roleBadge");
+    }
+    if (data.user_type === "admin") {
+      document.getElementById("manageAccountBtn").classList.add("visible");
+      badge.innerHTML = '<span class="role-badge admin">Quản trị viên</span>';
+    } else if (data.user_type === "teacher") {
       badge.innerHTML = '<span class="role-badge teacher">Giảng viên</span>';
     }
   } catch(e) {}

@@ -1,2 +1,7 @@
 /rag_env/
 /chat.db
+
+# Runtime artifacts — regenerated, not needed to run the app
+__pycache__/
+/uploads_tmp/
+/eval_results_*.xlsx
