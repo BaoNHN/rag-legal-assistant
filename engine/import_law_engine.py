@@ -173,20 +173,29 @@ def _ocr_page(detector, pil_image) -> str:
 
 
 # ── Segment full text into articles ──────────────────────────────────────────
-def _segment(full_text: str) -> list:
+def _segment(full_text: str) -> tuple:
+    """Split into one chunk per 'Điều X.' (legal article).
+
+    Returns (segments, matched_by_article). matched_by_article is False when
+    the article-boundary regex couldn't find enough headers and a fixed-size
+    fallback chunking was used instead — fallback chunks straddle article
+    boundaries and must NOT be tagged with a fabricated article number.
+    """
     clean = _re.sub(r'\n{3,}', '\n\n', full_text)
     clean = _re.sub(r'[ \t]+', ' ', clean).strip()
     pattern = r'(?:(?:^|\n)(?=Điều\s+\d+[a-z]?[.,]\s))'
     splits = _re.split(pattern, clean, flags=_re.MULTILINE)
     segs = [s.strip() for s in splits if len(s.strip()) > 50]
-    if len(segs) < 5:
-        # fallback: fixed chunks
-        size, overlap, segs = 3000, 300, []
-        i = 0
-        while i < len(clean):
-            segs.append(clean[i:i + size])
-            i += size - overlap
-    return segs
+    if len(segs) >= 5:
+        return segs, True
+
+    # fallback: fixed chunks — article boundaries could not be detected
+    size, overlap, segs = 3000, 300, []
+    i = 0
+    while i < len(clean):
+        segs.append(clean[i:i + size])
+        i += size - overlap
+    return segs, False
 
 
 # ── Direct text extraction (selectable PDFs) ─────────────────────────────────
@@ -298,27 +307,38 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
 
         # ── 4. Segment ──
         _set_job(job_id, message=f"Phân đoạn văn bản pháp luật ({len(full_text):,} ký tự)…")
-        segs = _segment(full_text)
+        segs, matched_by_article = _segment(full_text)
+
+        if not matched_by_article:
+            _set_job(job_id, message=(
+                "⚠️ Không nhận diện được ranh giới 'Điều X.' trong văn bản — "
+                "đang dùng chế độ cắt đoạn dự phòng (3000 ký tự/đoạn). "
+                "Trích dẫn theo số Điều có thể không chính xác cho văn bản này."
+            ))
 
         # ── 5. Build documents ──
         docs = []
         for i, seg in enumerate(segs):
             m = _re.match(r'Điều\s+(\d+[a-z]?)[.,\s]', seg)
-            art_num = m.group(1) if m else str(i + 1)
             lines = [l.strip() for l in seg.split('\n') if l.strip()]
-            title = lines[0][:120] if lines else f"Điều {art_num}"
-            docs.append(Document(
-                page_content=seg,
-                metadata={
-                    "so_ky_hieu": so_ky_hieu,
-                    "loai_van_ban": loai_van_ban,
-                    "nguon_thu_thap": nguon_thu_thap,
-                    "title": title,
-                    "article_number": art_num,
-                    "char_count": len(seg),
-                    "segment_index": i,
-                }
-            ))
+            meta = {
+                "so_ky_hieu": so_ky_hieu,
+                "loai_van_ban": loai_van_ban,
+                "nguon_thu_thap": nguon_thu_thap,
+                "char_count": len(seg),
+                "segment_index": i,
+            }
+            if m:
+                # Real article boundary — safe to tag with its true number.
+                art_num = m.group(1)
+                meta["article_number"] = art_num
+                meta["article_reference"] = f"Điều {art_num}"
+                meta["title"] = lines[0][:120] if lines else f"Điều {art_num}"
+            else:
+                # Fallback chunk with no detected header — do NOT fabricate an
+                # article number (segment index != real article number).
+                meta["title"] = lines[0][:120] if lines else f"Đoạn {i + 1}"
+            docs.append(Document(page_content=seg, metadata=meta))
 
         # ── 6. Add to ChromaDB (no wipe, skip existing so_ky_hieu) ──
         _set_job(job_id, message=f"Tải {len(docs)} đoạn lên ChromaDB…")
@@ -343,6 +363,11 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
             f"✅ Hoàn tất! Đã thêm {len(new_docs)} đoạn vào ChromaDB "
             f"(bỏ qua {skipped} đoạn trùng lặp)."
         )
+        if not matched_by_article:
+            result_msg += (
+                "\n⚠️ Lưu ý: không tách được theo 'Điều X.' — đã dùng cắt đoạn dự phòng, "
+                "trích dẫn số Điều có thể không chính xác cho văn bản này."
+            )
         _set_job(job_id, status="done", message=result_msg)
 
     except Exception as e:

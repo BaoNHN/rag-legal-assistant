@@ -162,6 +162,19 @@ def extract_topic_from_question(question: str) -> str | None:
 
 
 # =========================
+# EXTRACT EXPLICIT ARTICLE NUMBER
+# ─────────────────────────────
+# Questions like "Điều 143" or "Điều 143 quy định gì?" name the article
+# directly. Semantic embedding search is unreliable for this (bge-small
+# is not tuned for Vietnamese legal numerals), so we match it against the
+# article_number metadata exactly instead of relying on vector similarity.
+# =========================
+def extract_article_number_from_question(question: str) -> str | None:
+    m = re.search(r'điều\s+(\d+[a-z]?)\b', question, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+# =========================
 # TOPIC-AWARE RETRIEVAL
 # ─────────────────────────────
 # FIX for knowledge questions scoring 57.7/100:
@@ -171,6 +184,7 @@ def extract_topic_from_question(question: str) -> str | None:
 # =========================
 def retrieve_docs(question: str, rewritten_q: str):
     topic = extract_topic_from_question(question)
+    article_num = extract_article_number_from_question(question)
 
     try:
         results = vectorstore.get(include=["documents", "metadatas"])
@@ -181,6 +195,14 @@ def retrieve_docs(question: str, rewritten_q: str):
                 page_content=doc_text,
                 metadata=meta
             ))
+
+        # ===== EXACT ARTICLE NUMBER MATCH =====
+        # "Điều 143" etc. — filter on article_number metadata exactly instead
+        # of trusting embedding similarity to find the right numbered article.
+        if article_num:
+            exact = [d for d in all_docs if d.metadata.get("article_number", "") == article_num]
+            if exact:
+                return exact[:5]
 
         # ===== STRICT TOPIC MATCH =====
         if topic:
@@ -209,6 +231,20 @@ def retrieve_docs(question: str, rewritten_q: str):
             # confidence threshold
             if scored and scored[0][0] >= 0.55:
                 return [d for _, d in scored[:5]]
+
+        # ===== BARE-KEYWORD SUBSTRING MATCH =====
+        # Short queries like "Tập đoàn" (no question phrasing, no topic/article
+        # match above) — embedding similarity is unreliable for 1-3 word
+        # Vietnamese legal terms with an English-tuned model. Scan titles and
+        # content directly for the phrase instead.
+        q_lower = question.lower().strip()
+        if q_lower and len(q_lower.split()) <= 5:
+            kw_hits = [
+                d for d in all_docs
+                if q_lower in d.page_content.lower() or q_lower in d.metadata.get("title", "").lower()
+            ]
+            if kw_hits:
+                return kw_hits[:5]
 
         # ===== FALLBACK SEMANTIC SEARCH with similarity threshold =====
         results_with_scores = vectorstore.similarity_search_with_score(rewritten_q, k=5)

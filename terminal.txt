@@ -32,10 +32,21 @@ python engine/evaluate_engine.py --mode auto --split test
 // Import file PDF / DOCX có text (không cần OCR)
 // --so-ky-hieu : mã văn bản   --loai : loại văn bản   --nguon : nguồn
 // Nếu so_ky_hieu đã tồn tại trong DB sẽ tự skip (thêm --force để ghi đè)
+// (Đã sửa 2026-07-06: regex tách "Điều X." trước đây gõ nhầm "Dieu" (D thường)
+//  thay vì "Điều" (Đ tiếng Việt) nên KHÔNG BAO GIỜ khớp — luôn rơi vào fallback
+//  cắt cứng 3000 ký tự, làm sai article_number/trích dẫn. Giờ đã sửa đúng, và
+//  nếu vẫn rơi vào fallback (văn bản không có "Điều X." rõ ràng) script sẽ in
+//  cảnh báo thay vì âm thầm gán số Điều giả.)
 python database/build_db_doc.py "67_VBHN-VPQH_671127 (1).docx" --so-ky-hieu "67/VBHN-VPQH" --loai "Van ban hop nhat" --nguon "vbpl.vn"
 python database/build_db_doc.py "2025_1107 + 1108_67-VBHN-VPQH.pdf" --so-ky-hieu "67/VBHN-VPQH-2025" --loai "Van ban hop nhat" --nguon "chinhphu.vn"
 // Ghi đè nếu muốn import lại
 python database/build_db_doc.py "ten_file.pdf" --so-ky-hieu "XX/YYYY" --loai "Luat" --nguon "vbpl.vn" --force
+
+// Nếu ChromaDB đang có dữ liệu luật 67/VBHN-VPQH bị chunk sai từ TRƯỚC khi sửa lỗi
+// regex ở trên (dấu hiệu: article_number == segment_index+1, trích dẫn lộn Điều) —
+// script này xóa các đoạn hỏng đó và build lại đúng từ file docx gốc, không đụng
+// tới 310 bản ghi Q&A/KB_Articles khác trong DB
+python database/rebuild_law_from_docx.py
 
 // chạy chương trình
 python app.py

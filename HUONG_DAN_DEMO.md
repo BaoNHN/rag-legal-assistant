@@ -241,6 +241,7 @@ Nhấn **"🚀 Tải lên & Xử lý AI"** để bắt đầu.
 - Văn bản có **số ký hiệu trùng** sẽ bị bỏ qua tự động (không import lại)
 - PDF văn bản số (có thể chọn/copy chữ) được trích xuất trực tiếp — **nhanh, không cần OCR**
 - OCR chỉ chạy khi phát hiện PDF là bản scan, mặc định trên **CPU** — file 50 trang có thể mất 10–30 phút
+- Nếu hệ thống **không nhận diện được ranh giới "Điều X."** trong văn bản (văn bản không có tiêu đề điều rõ ràng), quy trình sẽ dùng cắt đoạn dự phòng (3000 ký tự/đoạn) và **báo cảnh báo rõ ràng** trong tiến trình + trong chat "Import new law" — các đoạn này sẽ không có trích dẫn số Điều (thay vì âm thầm gán số Điều sai như trước)
 - Để dùng **GPU** (nhanh hơn đáng kể), tạo file `.device_config` tại thư mục gốc:
   ```
   DEVICE=cuda
@@ -583,6 +584,25 @@ DEVICE=cuda
 **Nguyên nhân:** File dataset đang chọn chỉ có sheet `Dataset_*` (dùng được cho Full Evaluation) nhưng thiếu sheet `Demo_*`.
 
 **Khắc phục:** Chọn file khác có sẵn sheet `Demo_*` trong dropdown, hoặc thêm một sheet đặt tên `Demo_<số>` vào file Excel đó rồi tải lại trang.
+
+---
+
+### Trả Lời Sai Nội Dung / Trích Dẫn Sai Điều Luật (VD: hỏi "Điều 143" ra nội dung Điều khác)
+
+**Triệu chứng:** Đặt câu hỏi nêu rõ số Điều (VD: "Điều 143") hoặc một từ khóa ngắn (VD: "Tập đoàn") nhưng câu trả lời/trích dẫn không khớp với Điều luật thực sự nói về nội dung đó.
+
+**Nguyên nhân đã phát hiện (2026-07-06):** Dữ liệu văn bản 67/VBHN-VPQH trong ChromaDB từng bị import bằng `database/build_db_doc.py` với regex tách "Điều X." gõ nhầm ký tự (`Dieu` ASCII thay vì `Điều` tiếng Việt) — regex này không bao giờ khớp, khiến toàn bộ văn bản bị cắt cứng thành từng đoạn 3000 ký tự bất kể ranh giới Điều luật, và metadata `article_number` chỉ là số thứ tự đoạn (không phải số Điều thật). Hệ quả: một đoạn có thể chứa nội dung của 2 Điều liền kề, và tra cứu theo số Điều/từ khóa ngắn trả về sai.
+
+**Đã khắc phục:**
+- Sửa regex trong `database/build_db_doc.py` và `engine/import_law_engine.py` để khớp đúng "Điều X." (ký tự Đ tiếng Việt)
+- Cả 2 script giờ **cảnh báo rõ ràng** thay vì âm thầm gán số Điều giả nếu vẫn rơi vào fallback
+- `engine/rag_engine.py` được thêm 2 cơ chế truy xuất mới: (1) tra thẳng theo metadata khi câu hỏi có dạng "Điều N", (2) quét từ khóa trực tiếp cho câu hỏi ngắn (≤5 từ, VD "Tập đoàn") — thay vì chỉ dựa vào tìm kiếm ngữ nghĩa
+
+**Nếu ChromaDB hiện tại vẫn còn dữ liệu luật bị chunk sai** (dấu hiệu: metadata `article_number` trùng với `segment_index + 1`), chạy:
+```bash
+python database/rebuild_law_from_docx.py
+```
+Script này xóa các đoạn văn bản 67/VBHN-VPQH bị chunk sai và build lại đúng theo từng Điều từ file DOCX gốc (`67_VBHN-VPQH_671127 (1).docx`), **không đụng** tới dữ liệu Q&A/KB_Articles từ Dataset Excel.
 
 ---
 

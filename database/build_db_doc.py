@@ -62,24 +62,33 @@ def extract_docx(path: str) -> str:
 
 
 # ── Segmenter ─────────────────────────────────────────────────────────────────
-def segment(full_text: str) -> list:
+def segment(full_text: str) -> tuple:
+    """Split into one chunk per 'Điều X.' (legal article).
+
+    Returns (segments, matched_by_article). matched_by_article is False when
+    the article-boundary regex couldn't find enough headers and a fixed-size
+    fallback chunking was used instead — fallback chunks straddle article
+    boundaries and must NOT be tagged with a fabricated article number.
+    """
     clean = re.sub(r'\n{3,}', '\n\n', full_text)
     clean = re.sub(r'[ \t]+', ' ', clean).strip()
 
-    # Split on "Dieu X." boundaries
-    pattern = r'(?:(?:^|\n)(?=Di[eê]u\s+\d+[a-z]?[.,\s]))'
-    parts   = re.split(pattern, clean, flags=re.MULTILINE | re.IGNORECASE)
+    # Split on "Điều X." boundaries (real Vietnamese "Đ", not ASCII "D")
+    pattern = r'(?:(?:^|\n)(?=Điều\s+\d+[a-z]?[.,]\s))'
+    parts   = re.split(pattern, clean, flags=re.MULTILINE)
     segs    = [s.strip() for s in parts if len(s.strip()) > 50]
 
-    if len(segs) < 5:
-        # Fallback: fixed-size chunks
-        size, overlap, segs = 3000, 300, []
-        i = 0
-        while i < len(clean):
-            segs.append(clean[i:i + size])
-            i += size - overlap
+    if len(segs) >= 5:
+        return segs, True
 
-    return segs
+    # Fallback: fixed-size chunks — article boundaries could not be detected
+    size, overlap, segs = 3000, 300, []
+    i = 0
+    while i < len(clean):
+        segs.append(clean[i:i + size])
+        i += size - overlap
+
+    return segs, False
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -136,29 +145,36 @@ def main():
 
     # ── Segment ──
     print("Segmenting into articles...")
-    segs = segment(full_text)
+    segs, matched_by_article = segment(full_text)
     print(f"  Found {len(segs)} segments")
+    if not matched_by_article:
+        print("[!] Could not detect 'Điều X.' boundaries — using fixed-size fallback chunking.")
+        print("    Article-number citations will be inaccurate for this document.")
 
     # ── Build documents ──
     docs = []
     for i, seg in enumerate(segs):
-        m       = re.match(r'Di[eê]u\s+(\d+[a-z]?)', seg, re.IGNORECASE)
-        art_num = m.group(1) if m else str(i + 1)
-        lines   = [l.strip() for l in seg.split('\n') if l.strip()]
-        title   = lines[0][:120] if lines else f"Dieu {art_num}"
+        m     = re.match(r'Điều\s+(\d+[a-z]?)[.,\s]', seg)
+        lines = [l.strip() for l in seg.split('\n') if l.strip()]
+        meta = {
+            "so_ky_hieu":     so_ky_hieu,
+            "loai_van_ban":   loai,
+            "nguon_thu_thap": nguon,
+            "char_count":     len(seg),
+            "segment_index":  i,
+        }
+        if m:
+            # Real article boundary — safe to tag with its true number.
+            art_num = m.group(1)
+            meta["article_number"] = art_num
+            meta["article_reference"] = f"Điều {art_num}"
+            meta["title"] = lines[0][:120] if lines else f"Điều {art_num}"
+        else:
+            # Fallback chunk with no detected header — do NOT fabricate an
+            # article number (segment index != real article number).
+            meta["title"] = lines[0][:120] if lines else f"Đoạn {i + 1}"
 
-        docs.append(Document(
-            page_content=seg,
-            metadata={
-                "so_ky_hieu":    so_ky_hieu,
-                "loai_van_ban":  loai,
-                "nguon_thu_thap":nguon,
-                "title":         title,
-                "article_number":art_num,
-                "char_count":    len(seg),
-                "segment_index": i,
-            }
-        ))
+        docs.append(Document(page_content=seg, metadata=meta))
 
     # ── Load ChromaDB ──
     print("\nLoading embedding model (BAAI/bge-small-en-v1.5)...")
