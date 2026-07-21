@@ -327,6 +327,7 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
                 "nguon_thu_thap": nguon_thu_thap,
                 "char_count": len(seg),
                 "segment_index": i,
+                "import_source": "law",
             }
             if m:
                 # Real article boundary — safe to tag with its true number.

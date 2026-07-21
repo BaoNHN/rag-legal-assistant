@@ -17,6 +17,12 @@ os.makedirs(DATASET_DIR, exist_ok=True)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+# There's no UI to browse historical eval runs, only the most recent one
+# matters — keep disk clutter down by pruning older eval_results_*.xlsx files
+# every time a new one is written.
+KEEP_LATEST_EVAL_FILES = 2
+LATEST_RESULT_PATH     = os.path.join(BASE_DIR, "eval_results_latest.json")
+
 # ── Job registry ─────────────────────────────────────────────────────────────
 _jobs: dict = {}
 _lock = threading.Lock()
@@ -35,16 +41,24 @@ def _set(job_id: str, **kwargs):
 
 
 # ── Dataset discovery ──────────────────────────────────────────────────────────
+# Template files that live in Dataset/ purely so /download_dataset_example can
+# serve them — they demonstrate the schema, not real evaluation data, so they
+# must never appear as a selectable evaluation dataset.
+_TEMPLATE_FILENAMES = {"example_sheet.xlsx"}
+
+
 def list_available_datasets() -> list:
     """
     Scans DATASET_DIR (Dataset/) for .xlsx files usable as evaluation datasets —
     any file containing at least one Dataset_* or Demo_* sheet. Picks up future
-    files automatically, no hardcoded filenames.
+    files automatically, no hardcoded filenames (except _TEMPLATE_FILENAMES).
     Returns [{filename, demo_sheets, dataset_sheets}], sorted by filename.
     """
     results = []
     for fname in sorted(os.listdir(DATASET_DIR)):
         if not fname.lower().endswith(".xlsx") or fname.startswith("~$"):
+            continue
+        if fname in _TEMPLATE_FILENAMES:
             continue
         try:
             sheets = pd.ExcelFile(os.path.join(DATASET_DIR, fname)).sheet_names
@@ -182,6 +196,95 @@ Chỉ trả về JSON, không giải thích. Ví dụ:
     return {k: 0 for k in RUBRIC} | {"total": 0.0}
 
 
+def _prune_old_eval_files(keep: int = KEEP_LATEST_EVAL_FILES):
+    """Keep only the `keep` most recently modified eval_results_*.xlsx files
+    in BASE_DIR — older ones are just disk clutter with no UI to browse them."""
+    files = [
+        f for f in os.listdir(BASE_DIR)
+        if f.startswith("eval_results_") and f.lower().endswith(".xlsx")
+    ]
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(BASE_DIR, f)), reverse=True)
+    for f in files[keep:]:
+        try:
+            os.remove(os.path.join(BASE_DIR, f))
+        except Exception:
+            pass
+
+
+def _save_latest_result(summary_payload: dict):
+    try:
+        with open(LATEST_RESULT_PATH, "w", encoding="utf-8") as f:
+            json.dump(summary_payload, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _summary_from_xlsx(path: str) -> dict:
+    """Recompute a summary_payload-shaped dict from an existing eval_results
+    xlsx's per-question score_* columns — used to backfill a score card for a
+    run that finished before eval_results_latest.json existed."""
+    df_res = pd.read_excel(path)
+    if df_res.empty or "score_total" not in df_res.columns:
+        return None
+
+    avg_scores = {}
+    for k in RUBRIC:
+        col = f"score_{k}"
+        if col in df_res.columns:
+            avg_scores[k] = round(df_res[col].mean(), 2)
+
+    by_type = {}
+    by_diff = {}
+    if "question_type" in df_res.columns:
+        for qt, grp in df_res.groupby("question_type"):
+            by_type[qt] = round(grp["score_total"].mean(), 1)
+    if "difficulty" in df_res.columns:
+        for diff, grp in df_res.groupby("difficulty"):
+            by_diff[diff] = round(grp["score_total"].mean(), 1)
+
+    return {
+        "total_questions": len(df_res),
+        "avg_total":       round(df_res["score_total"].mean(), 1),
+        "avg_scores":      avg_scores,
+        "rubric_labels":   RUBRIC_LABELS,
+        "rubric_weights":  RUBRIC,
+        "by_type":         by_type,
+        "by_difficulty":   by_diff,
+        "output_file":     os.path.basename(path),
+        "mode":            "auto",
+        "split":           "",
+        "dataset_file":    "",
+        "sheets_used":     [],
+    }
+
+
+def get_latest_eval_result() -> dict:
+    """Returns the persisted summary of the most recent evaluation run for the
+    Evaluate tab to show on open. Falls back to reconstructing it from the
+    newest eval_results_*.xlsx on disk (and persists that reconstruction) if
+    no run has completed since eval_results_latest.json was introduced.
+    Returns None if no evaluation result exists at all."""
+    if os.path.exists(LATEST_RESULT_PATH):
+        try:
+            with open(LATEST_RESULT_PATH, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    files = [
+        f for f in os.listdir(BASE_DIR)
+        if f.startswith("eval_results_") and f.lower().endswith(".xlsx")
+    ]
+    if not files:
+        return None
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(BASE_DIR, f)), reverse=True)
+
+    summary = _summary_from_xlsx(os.path.join(BASE_DIR, files[0]))
+    if summary:
+        _save_latest_result(summary)
+    return summary
+
+
 # ── Main background task ──────────────────────────────────────────────────────
 def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None):
     """
@@ -317,6 +420,7 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
         dataset_stem = os.path.splitext(dataset_label)[0]
         out_path     = os.path.join(BASE_DIR, f"eval_results_{dataset_stem}_{split}_{mode}_{ts}.xlsx")
         df_res.to_excel(out_path, index=False)
+        _prune_old_eval_files()
 
         summary_payload = {
             "total_questions": len(results),
@@ -332,6 +436,7 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
             "dataset_file":    dataset_label,
             "sheets_used":     matched,
         }
+        _save_latest_result(summary_payload)
 
         _set(job_id,
              status="done",

@@ -54,6 +54,29 @@
     }
     .btn-manage-account.visible { display: block; }
 
+    .btn-manage-law {
+      display: none;
+      width: 90%;
+      margin-right: 30px;
+      margin-top: 8px;
+      padding: 9px 10px;
+      border: 1.5px solid rgb(16 15 15 / 0.5);
+      background: #343541;
+      color: white;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      text-align: center;
+      transition: all .18s;
+      text-decoration: none;
+    }
+    .btn-manage-law:hover {
+      background: #40414a;
+      border-color: #0DB4A2;
+    }
+    .btn-manage-law.visible { display: block; }
+
     /* Role badge in sidebar */
     .role-badge {
       display: inline-block;
@@ -89,6 +112,10 @@
       <!-- Manage Account button — shown only for admins via JS -->
       <a href="/manage_accounts" class="btn-manage-account" id="manageAccountBtn">
         👤 Manage Account
+      </a>
+      <!-- Manage Law button — shown only for admins via JS -->
+      <a href="/manage_law" class="btn-manage-law" id="manageLawBtn">
+        🗂️ Manage Law
       </a>
     </div>
     <div class="sidebar-chats" id="chat-list"></div>
@@ -147,6 +174,7 @@
     }
     if (data.user_type === "admin") {
       document.getElementById("manageAccountBtn").classList.add("visible");
+      document.getElementById("manageLawBtn").classList.add("visible");
       badge.innerHTML = '<span class="role-badge admin">Quản trị viên</span>';
     } else if (data.user_type === "teacher") {
       badge.innerHTML = '<span class="role-badge teacher">Giảng viên</span>';

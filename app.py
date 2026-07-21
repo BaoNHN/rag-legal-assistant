@@ -8,7 +8,12 @@ import re
 import uuid
 import io
 
-from engine.rag_engine import ask_rag, list_indexed_sources, delete_source
+from engine.rag_engine import (
+    ask_rag,
+    list_indexed_sources, delete_source,
+    list_dataset_sources, delete_dataset_source,
+    list_scenario_sources, delete_scenario_source,
+)
 from database.database import (
     init_db, get_conn,
     login_user,
@@ -19,8 +24,9 @@ from database.database import (
     change_user_password,
 )
 from engine.import_law_engine import run_import, get_job
+from engine.import_scenario_engine import run_import_scenario, get_scenario_job
 from engine.import_dataset_engine import run_import_dataset, get_dataset_job
-from engine.evaluate_engine import run_evaluation, get_eval_job, list_available_datasets
+from engine.evaluate_engine import run_evaluation, get_eval_job, list_available_datasets, get_latest_eval_result
 from engine.import_account_engine import run_import_accounts, build_template_bytes
 
 PASSWORD_RE = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$')
@@ -73,6 +79,13 @@ async def manage_accounts_page(request: Request):
     if not logged_in(request) or not is_admin(request):
         return RedirectResponse("/", status_code=302)
     return templates.TemplateResponse(request, "manage_accounts.html")
+
+
+@app.get("/manage_law", response_class=HTMLResponse)
+async def manage_law_page(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return RedirectResponse("/", status_code=302)
+    return templates.TemplateResponse(request, "manage_law.html")
 
 
 @app.get("/import_account", response_class=HTMLResponse)
@@ -238,14 +251,14 @@ async def import_status(job_id: str):
 
 @app.get("/list_law_sources")
 async def list_law_sources_route(request: Request):
-    if not logged_in(request) or not is_teacher(request):
+    if not logged_in(request) or not is_admin(request):
         return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
     return list_indexed_sources()
 
 
 @app.post("/delete_law_source")
 async def delete_law_source_route(request: Request):
-    if not logged_in(request) or not is_teacher(request):
+    if not logged_in(request) or not is_admin(request):
         return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
 
     data       = await request.json()
@@ -260,6 +273,111 @@ async def delete_law_source_route(request: Request):
             status_code=404,
         )
     return {"status": "ok", "deleted": deleted}
+
+
+@app.get("/list_dataset_sources")
+async def list_dataset_sources_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return list_dataset_sources()
+
+
+@app.post("/delete_dataset_source")
+async def delete_dataset_source_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data        = await request.json()
+    source_name = (data.get("name") or "").strip()
+    if not source_name:
+        return JSONResponse({"status": "error", "message": "Thiếu name"}, status_code=400)
+
+    deleted = delete_dataset_source(source_name)
+    if deleted == 0:
+        return JSONResponse(
+            {"status": "error", "message": f"Không tìm thấy dataset '{source_name}' trong ChromaDB."},
+            status_code=404,
+        )
+    return {"status": "ok", "deleted": deleted}
+
+
+@app.get("/list_scenario_sources")
+async def list_scenario_sources_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return list_scenario_sources()
+
+
+@app.post("/delete_scenario_source")
+async def delete_scenario_source_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data        = await request.json()
+    source_name = (data.get("name") or "").strip()
+    if not source_name:
+        return JSONResponse({"status": "error", "message": "Thiếu name"}, status_code=400)
+
+    deleted = delete_scenario_source(source_name)
+    if deleted == 0:
+        return JSONResponse(
+            {"status": "error", "message": f"Không tìm thấy tình huống '{source_name}' trong ChromaDB."},
+            status_code=404,
+        )
+    return {"status": "ok", "deleted": deleted}
+
+
+# ── Import scenario (DOCX case-study set) ───────────────────────────────────────
+@app.post("/import_scenario")
+async def import_scenario_route(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    docx_file: UploadFile = File(None),
+):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    if not docx_file or not (docx_file.filename or "").lower().endswith(".docx"):
+        return JSONResponse({"status": "error", "message": "Chỉ chấp nhận file .docx"}, status_code=400)
+
+    job_id    = str(uuid.uuid4())
+    file_path = os.path.join(UPLOAD_DIR, f"{job_id}.docx")
+    content   = await docx_file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    teacher_id = request.session["user_id"]
+
+    background_tasks.add_task(
+        run_import_scenario,
+        job_id=job_id,
+        file_path=file_path,
+        student_id=teacher_id,
+        original_filename=docx_file.filename,
+    )
+    return {"status": "ok", "job_id": job_id, "message": "Đã nhận file. Đang xử lý nền…"}
+
+
+@app.get("/import_scenario_status/{job_id}")
+async def import_scenario_status(job_id: str):
+    job = get_scenario_job(job_id)
+    return job if job else {"status": "unknown"}
+
+
+@app.get("/download_scenario_example")
+async def download_scenario_example_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return RedirectResponse("/", status_code=302)
+
+    file_path = os.path.join(BASE_DIR, "Dataset", "example_scenario.docx")
+    if not os.path.exists(file_path):
+        return JSONResponse({"status": "error", "message": "Không tìm thấy file mẫu"}, status_code=404)
+
+    return StreamingResponse(
+        open(file_path, "rb"),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": "attachment; filename=example_scenario.docx"},
+    )
 
 
 # ── Import dataset (Excel) ─────────────────────────────────────────────────────
@@ -357,6 +475,14 @@ async def evaluate_route(
 async def evaluate_status_route(job_id: str):
     job = get_eval_job(job_id)
     return job if job else {"status": "unknown"}
+
+
+@app.get("/latest_eval_result")
+async def latest_eval_result_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    result = get_latest_eval_result()
+    return result if result else {"status": "empty"}
 
 
 @app.get("/download_eval_result/{filename}")

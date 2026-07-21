@@ -258,29 +258,6 @@ main {
 /* ── DIVIDER ── */
 .divider { height: 1px; background: rgba(255,255,255,0.07); margin: 24px 0; }
 
-/* ── MANAGE LAW SOURCES ── */
-.manage-section h3 { font-family: 'Crimson Pro', serif; font-size: 18px; font-weight: 600; color: var(--white); margin-bottom: 4px; }
-.manage-section .manage-desc { font-size: 12.5px; color: var(--gray); margin-bottom: 14px; line-height: 1.5; }
-.law-sources-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
-.law-source-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; }
-.law-source-row .ls-name { flex: 1; font-size: 12.5px; color: var(--white); font-weight: 500; overflow-wrap: anywhere; }
-.law-source-row .ls-count { font-size: 11px; color: var(--gray); flex: 0 0 auto; white-space: nowrap; }
-.btn-delete-source {
-  flex: 0 0 auto;
-  background: rgba(214,59,59,0.15);
-  border: 1px solid rgba(214,59,59,0.35);
-  color: #FF8080;
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  font-family: 'DM Sans', sans-serif;
-  cursor: pointer;
-  transition: all .15s;
-}
-.btn-delete-source:hover:not(:disabled) { background: rgba(214,59,59,0.28); }
-.btn-delete-source:disabled { opacity: .5; cursor: not-allowed; }
-
 /* ── EVALUATION SECTION ── */
 .eval-section h3 {
   font-family: 'Crimson Pro', serif;
@@ -468,6 +445,9 @@ main {
       <button class="tab-btn" id="tabDataset" onclick="switchTab('dataset')">
         📊 Import Dataset
       </button>
+      <button class="tab-btn" id="tabScenario" onclick="switchTab('scenario')">
+        📚 Tình huống
+      </button>
     </div>
 
     <!-- ══ PANEL: PDF / DOCX ══ -->
@@ -523,20 +503,6 @@ main {
         <div class="s-icon">✅</div>
         <h3>Hoàn tất!</h3>
         <p id="pdfSuccessMsg"></p>
-      </div>
-
-      <!-- ── Manage imported law sources ── -->
-      <div class="divider"></div>
-
-      <div class="manage-section">
-        <h3>🗂️ Văn bản đã import</h3>
-        <p class="manage-desc">
-          Xoá một văn bản sẽ gỡ toàn bộ đoạn đã index khỏi ChromaDB và cập nhật lại
-          danh sách nguồn được phép trích dẫn — không thể hoàn tác.
-        </p>
-        <div class="law-sources-list" id="lawSourcesList">
-          <p style="font-size:12px;color:var(--gray);">Đang tải…</p>
-        </div>
       </div>
     </div><!-- /panelPdf -->
 
@@ -623,6 +589,7 @@ main {
 
         <!-- Score card -->
         <div class="score-card" id="scoreCard">
+          <div class="score-latest-note" id="scoreLatestNote" style="display:none;font-size:11.5px;color:var(--gold);margin-bottom:10px;">📌 Kết quả lần đánh giá gần nhất</div>
           <div class="score-header">
             <div class="score-total-wrap">
               <div class="score-total-num" id="scoreTotalNum">–</div>
@@ -641,6 +608,48 @@ main {
         </div>
       </div><!-- /eval-section -->
     </div><!-- /panelDataset -->
+
+    <!-- ══ PANEL: SCENARIO (case-study DOCX) ══ -->
+    <div class="panel" id="panelScenario">
+      <h1 class="panel-title">Nhập văn bản tình huống</h1>
+      <p class="panel-subtitle">Tải lên file <span>.docx</span> chứa bộ tình huống pháp lý (dạng IRAC) để đưa vào ChromaDB</p>
+
+      <div class="drop-zone" id="scDropZone">
+        <input type="file" id="scInput" accept=".docx"/>
+        <div class="dz-icon">📚</div>
+        <h2>Chọn hoặc kéo thả file .docx</h2>
+        <p>Mỗi tình huống trong file sẽ được tách thành một đoạn dữ liệu riêng</p>
+        <div class="btn-select">Chọn file .docx</div>
+      </div>
+
+      <div class="file-chosen" id="scFileChosen">
+        <span class="file-icon">📋</span>
+        <div class="file-info">
+          <div class="file-name" id="scFileName">–</div>
+          <div class="file-size" id="scFileSize">–</div>
+        </div>
+        <button class="remove-btn" id="scRemoveFile" title="Xoá file">✕</button>
+      </div>
+
+      <div class="global-error" id="scGlobalError"></div>
+
+      <button class="btn-submit" id="scSubmitBtn" onclick="handleScSubmit()">
+        <div class="spinner" id="scSpinner"></div>
+        <span id="scBtnText">📥 Tải lên &amp; Xử lý</span>
+      </button>
+
+      <div class="progress-banner" id="scProgressBanner" style="display:none;">
+        <i class="spin-icon">⚙️</i>
+        <h3>Đang xử lý…</h3>
+        <p id="scProgressMsg">Khởi động…</p>
+      </div>
+
+      <div class="success-banner" id="scSuccessBanner">
+        <div class="s-icon">✅</div>
+        <h3>Hoàn tất!</h3>
+        <p id="scSuccessMsg"></p>
+      </div>
+    </div><!-- /panelScenario -->
 
   </div><!-- /upload-card -->
 
@@ -725,6 +734,35 @@ main {
       </div>
     </div>
 
+    <!-- Scenario right panel -->
+    <div class="panel-right" id="rightScenario">
+      <h3>📚 Cấu trúc file Tình huống mẫu</h3>
+      <p>
+        Mỗi tình huống là một mục <strong>Heading 1</strong> dạng
+        <em>"Tình huống NN. &lt;Chủ đề&gt;"</em>, theo sau bởi các mục con:
+      </p>
+
+      <div class="schema-card">
+        <div class="schema-header">
+          📄 Cấu trúc mỗi <span class="sheet-badge">Tình huống</span>
+        </div>
+        <div class="schema-body">
+          <div class="schema-field"><span class="sf-name">Mã / Độ khó</span><span class="sf-desc">"Mã: TLDN_001&nbsp;&nbsp;&nbsp;Độ khó: Dễ"</span></div>
+          <div class="schema-field"><span class="sf-name">1. Đề bài</span><span class="sf-desc">"Tình huống: …" và "Câu hỏi: …"</span></div>
+          <div class="schema-field"><span class="sf-name">2. Câu hỏi dẫn dắt…</span><span class="sf-desc">Mỗi câu hỏi dẫn dắt một dòng riêng</span></div>
+          <div class="schema-field"><span class="sf-name">3. Đáp án theo IRAC</span><span class="sf-desc">"I – Issue:", "R – Rule:", "A – Application:", "C – Conclusion:"</span></div>
+          <div class="schema-field"><span class="sf-name">4. Căn cứ pháp lý</span><span class="sf-desc">Mỗi căn cứ pháp lý một dòng riêng</span></div>
+          <div class="schema-field"><span class="sf-name">5. Dữ liệu hỗ trợ truy xuất</span><span class="sf-desc">"Từ khóa: k1; k2" và "Câu hỏi tương đương: q1 | q2"</span></div>
+        </div>
+      </div>
+
+      <div class="template-note">
+        💡 File mẫu có sẵn 2 tình huống ví dụ đúng cấu trúc.<br/>
+        <a href="/download_scenario_example" class="btn-example-download">⬇️ Tải example_scenario.docx</a><br/>
+        Dùng làm template — sao chép khối "Tình huống NN." cho mỗi tình huống mới rồi upload lại.
+      </div>
+    </div>
+
   </div><!-- /example-panel -->
 </main>
 
@@ -739,10 +777,13 @@ main {
 function switchTab(tab) {
   document.getElementById('panelPdf').classList.toggle('active', tab === 'pdf');
   document.getElementById('panelDataset').classList.toggle('active', tab === 'dataset');
+  document.getElementById('panelScenario').classList.toggle('active', tab === 'scenario');
   document.getElementById('tabPdf').classList.toggle('active', tab === 'pdf');
   document.getElementById('tabDataset').classList.toggle('active', tab === 'dataset');
+  document.getElementById('tabScenario').classList.toggle('active', tab === 'scenario');
   document.getElementById('rightPdf').classList.toggle('active', tab === 'pdf');
   document.getElementById('rightDataset').classList.toggle('active', tab === 'dataset');
+  document.getElementById('rightScenario').classList.toggle('active', tab === 'scenario');
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
@@ -838,7 +879,6 @@ async function handlePdfSubmit() {
         document.getElementById('pdfProgressBanner').style.display = 'none';
         document.getElementById('pdfSuccessMsg').innerHTML =
           (document.getElementById('pdfProgressMsg').textContent || '').replace(/\n/g, '<br/>');
-        loadLawSources();
       }, msg => {
         const e = document.getElementById('pdfGlobalError');
         e.textContent = msg; e.style.display = 'block';
@@ -863,68 +903,6 @@ function showPdfFieldErr(id) {
   const eid = 'err' + id[0].toUpperCase() + id.slice(1);
   document.getElementById(eid).style.display = 'block';
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MANAGE IMPORTED LAW SOURCES
-// ─────────────────────────────────────────────────────────────────────────────
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-async function loadLawSources() {
-  const el = document.getElementById('lawSourcesList');
-  el.innerHTML = '<p style="font-size:12px;color:var(--gray);">Đang tải…</p>';
-  try {
-    const res  = await fetch('/list_law_sources');
-    const data = await res.json();
-    if (!Array.isArray(data) || !data.length) {
-      el.innerHTML = '<p style="font-size:12px;color:var(--gray);">Chưa có văn bản nào được import.</p>';
-      return;
-    }
-    el.innerHTML = data.map((s, i) => `
-      <div class="law-source-row">
-        <span class="ls-name">${escapeHtml(s.so_ky_hieu)}</span>
-        <span class="ls-count">${s.chunk_count} đoạn</span>
-        <button class="btn-delete-source" data-idx="${i}" onclick="deleteLawSource(this)">🗑️ Xoá</button>
-      </div>`).join('');
-    el.dataset.sources = JSON.stringify(data.map(s => s.so_ky_hieu));
-  } catch (e) {
-    el.innerHTML = '<p style="font-size:12px;color:var(--red);">❌ Lỗi tải danh sách văn bản.</p>';
-  }
-}
-
-async function deleteLawSource(btn) {
-  const el = document.getElementById('lawSourcesList');
-  const sources = JSON.parse(el.dataset.sources || '[]');
-  const soKyHieu = sources[Number(btn.dataset.idx)];
-  if (!soKyHieu) return;
-
-  if (!confirm(`Xoá toàn bộ văn bản "${soKyHieu}" khỏi ChromaDB? Hành động này không thể hoàn tác.`)) return;
-
-  btn.disabled = true;
-  btn.textContent = 'Đang xoá…';
-  try {
-    const res  = await fetch('/delete_law_source', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ so_ky_hieu: soKyHieu })
-    });
-    const data = await res.json();
-    if (data.status === 'ok') {
-      loadLawSources();
-    } else {
-      alert(data.message || 'Xoá thất bại.');
-      btn.disabled = false;
-      btn.textContent = '🗑️ Xoá';
-    }
-  } catch (e) {
-    alert('Lỗi kết nối khi xoá.');
-    btn.disabled = false;
-    btn.textContent = '🗑️ Xoá';
-  }
-}
-
-loadLawSources();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DATASET IMPORT
@@ -1008,6 +986,87 @@ async function handleDsSubmit() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SCENARIO (case-study DOCX) IMPORT
+// ─────────────────────────────────────────────────────────────────────────────
+let scSelectedFile = null;
+
+const scDropZone   = document.getElementById('scDropZone');
+const scInput      = document.getElementById('scInput');
+const scFileChosen = document.getElementById('scFileChosen');
+
+scInput.addEventListener('change', e => { if (e.target.files[0]) setScFile(e.target.files[0]); });
+document.getElementById('scRemoveFile').addEventListener('click', () => {
+  scSelectedFile = null;
+  scInput.value  = '';
+  scFileChosen.style.display = 'none';
+  scDropZone.style.display   = 'block';
+});
+
+scDropZone.addEventListener('dragover', e => { e.preventDefault(); scDropZone.classList.add('dragover'); });
+scDropZone.addEventListener('dragleave', () => scDropZone.classList.remove('dragover'));
+scDropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  scDropZone.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith('.docx')) setScFile(f);
+  else alert('Vui lòng chỉ tải lên file .docx!');
+});
+
+function setScFile(f) {
+  scSelectedFile = f;
+  document.getElementById('scFileName').textContent = f.name;
+  document.getElementById('scFileSize').textContent = (f.size / 1024 / 1024).toFixed(2) + ' MB';
+  scFileChosen.style.display = 'flex';
+  scDropZone.style.display   = 'none';
+  document.getElementById('scGlobalError').style.display = 'none';
+}
+
+async function handleScSubmit() {
+  const errEl = document.getElementById('scGlobalError');
+  errEl.style.display = 'none';
+
+  if (!scSelectedFile) {
+    errEl.textContent = '⚠️ Vui lòng chọn file .docx';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  const btn = document.getElementById('scSubmitBtn');
+  btn.disabled = true;
+  document.getElementById('scSpinner').style.display = 'block';
+  document.getElementById('scBtnText').textContent   = 'Đang xử lý…';
+
+  const fd = new FormData();
+  fd.append('docx_file', scSelectedFile);
+
+  try {
+    const res  = await fetch('/import_scenario', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      btn.style.display = 'none';
+      pollJob('/import_scenario_status/', data.job_id, 'scProgressBanner', 'scProgressMsg', () => {
+        document.getElementById('scProgressBanner').style.display = 'none';
+        document.getElementById('scSuccessBanner').style.display  = 'block';
+        document.getElementById('scSuccessMsg').textContent =
+          document.getElementById('scProgressMsg').textContent;
+      }, msg => {
+        errEl.textContent = msg; errEl.style.display = 'block';
+        btn.disabled = false; btn.style.display = 'flex';
+        document.getElementById('scSpinner').style.display = 'none';
+        document.getElementById('scBtnText').textContent   = '📥 Tải lên & Xử lý';
+      });
+    } else {
+      throw new Error(data.message || 'Server error');
+    }
+  } catch (err) {
+    errEl.textContent = '❌ Lỗi: ' + err.message; errEl.style.display = 'block';
+    btn.disabled = false;
+    document.getElementById('scSpinner').style.display = 'none';
+    document.getElementById('scBtnText').textContent   = '📥 Tải lên & Xử lý';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // EVALUATION
 // ─────────────────────────────────────────────────────────────────────────────
 let evalPollTimer = null;
@@ -1073,6 +1132,7 @@ function pollEval(jobId) {
         document.getElementById('evalProgress').style.display = 'none';
         document.getElementById('btnFull').disabled = false;
         updateDatasetHint(); // re-applies btnQuick disabled state for the selected file
+        document.getElementById('scoreLatestNote').style.display = 'none';
         if (job.scores) renderScores(job.scores);
       } else if (job.status === 'failed') {
         clearInterval(evalPollTimer);
@@ -1224,6 +1284,19 @@ function updateDatasetHint() {
 
 document.getElementById('evalDatasetSelect').addEventListener('change', updateDatasetHint);
 loadDatasetOptions();
+
+// ── Show the most recent evaluation result on page open, if one exists ──
+async function loadLatestEvalResult() {
+  try {
+    const res  = await fetch('/latest_eval_result');
+    const data = await res.json();
+    if (data && data.status !== 'empty' && data.status !== 'error') {
+      document.getElementById('scoreLatestNote').style.display = 'block';
+      renderScores(data);
+    }
+  } catch (e) { /* no persisted result yet — leave score card hidden */ }
+}
+loadLatestEvalResult();
 </script>
 </body>
 </html>

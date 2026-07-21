@@ -194,9 +194,124 @@ def delete_source(so_ky_hieu: str) -> int:
     return len(ids)
 
 
+# =========================
+# MANAGE LAW — DATASET / SCENARIO SOURCES
+# ─────────────────────────────
+# Import Law tags every chunk with so_ky_hieu (see list_indexed_sources/
+# delete_source above), so it needs no import_source tag. Dataset and Scenario
+# imports carry their own "import_source" tag (set in import_dataset_engine /
+# import_scenario_engine) so the Manage Law page can group and delete them by
+# uploaded file without touching unrelated chunks that happen to share a
+# so_ky_hieu (Dataset rows are all stamped so_ky_hieu="59/2020/QH14", the same
+# code as the real imported law text).
+# =========================
+UNKNOWN_SOURCE_FILE_LABEL = "(không rõ tệp — nhập trước khi có tính năng theo dõi tệp)"
+
+
+def backfill_import_source_tags():
+    """One-time migration for chunks indexed before import_source/source_file
+    existed. Idempotent — only touches chunks that don't have import_source
+    yet, so it's cheap and safe to call on every startup."""
+    try:
+        data = vectorstore.get(include=["metadatas"])
+    except Exception:
+        return
+
+    ids   = data.get("ids") or []
+    metas = data.get("metadatas") or []
+
+    update_ids, update_metas = [], []
+    for doc_id, m in zip(ids, metas):
+        if m.get("import_source"):
+            continue
+
+        if "segment_index" in m:
+            tag = "law"
+        elif m.get("doc_type") == "scenario_qa":
+            tag = "scenario"
+        elif (m.get("so_ky_hieu") or "").strip() == "59/2020/QH14":
+            tag = "dataset"
+        else:
+            # e.g. database/reference_source.py entries — not one of the 3
+            # UI-driven import types, leave untagged.
+            continue
+
+        new_meta = dict(m)
+        new_meta["import_source"] = tag
+        if tag == "dataset" and not new_meta.get("source_file"):
+            new_meta["source_file"] = UNKNOWN_SOURCE_FILE_LABEL
+        update_ids.append(doc_id)
+        update_metas.append(new_meta)
+
+    if update_ids:
+        vectorstore._collection.update(ids=update_ids, metadatas=update_metas)
+
+
+def list_dataset_sources() -> list:
+    """Distinct uploaded .xlsx filenames among dataset-origin chunks, with
+    chunk counts."""
+    try:
+        data = vectorstore.get(where={"import_source": "dataset"}, include=["metadatas"])
+    except Exception:
+        return []
+
+    counts = Counter((m.get("source_file") or UNKNOWN_SOURCE_FILE_LABEL).strip() for m in data["metadatas"])
+    return [{"name": k, "chunk_count": v} for k, v in sorted(counts.items())]
+
+
+def delete_dataset_source(source_file: str) -> int:
+    """Delete every dataset-origin chunk stamped with this source_file."""
+    source_file = (source_file or "").strip()
+    if not source_file:
+        return 0
+
+    existing = vectorstore.get(
+        where={"$and": [{"import_source": "dataset"}, {"source_file": source_file}]},
+        include=[],
+    )
+    ids = existing.get("ids") or []
+    if ids:
+        vectorstore.delete(ids=ids)
+
+    refresh_citation_sources()
+    return len(ids)
+
+
+def list_scenario_sources() -> list:
+    """Distinct uploaded .docx filenames among scenario_qa chunks, with chunk
+    counts."""
+    try:
+        data = vectorstore.get(where={"doc_type": "scenario_qa"}, include=["metadatas"])
+    except Exception:
+        return []
+
+    counts = Counter((m.get("nguon_thu_thap") or UNKNOWN_SOURCE_FILE_LABEL).strip() for m in data["metadatas"])
+    return [{"name": k, "chunk_count": v} for k, v in sorted(counts.items())]
+
+
+def delete_scenario_source(name: str) -> int:
+    """Delete every scenario_qa chunk whose source filename (nguon_thu_thap)
+    matches."""
+    name = (name or "").strip()
+    if not name:
+        return 0
+
+    existing = vectorstore.get(
+        where={"$and": [{"doc_type": "scenario_qa"}, {"nguon_thu_thap": name}]},
+        include=[],
+    )
+    ids = existing.get("ids") or []
+    if ids:
+        vectorstore.delete(ids=ids)
+
+    refresh_citation_sources()
+    return len(ids)
+
+
 # Populate the whitelist once at startup so it reflects chroma_db even if no
 # import happens during this process's lifetime.
 refresh_citation_sources()
+backfill_import_source_tags()
 
 
 def similarity(a: str, b: str) -> float:
