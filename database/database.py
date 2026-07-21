@@ -110,8 +110,54 @@ def init_db():
             ("admin1", "Admin@123", 2)
         )
 
+    # ── const (key/value store for cross-cutting config — e.g. the whitelist
+    # of legitimate document sources currently indexed in chroma_db, used to
+    # verify a citation isn't naming a source that was never actually imported)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS const (
+            name    TEXT PRIMARY KEY,
+            content TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
+
+
+# =========================
+# CONST (key/value store)
+# =========================
+def _ensure_const_table(c):
+    # engine.rag_engine calls set_const()/get_const() at module import time,
+    # which can run before app.py's init_db() — don't depend on ordering.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS const (
+            name    TEXT PRIMARY KEY,
+            content TEXT
+        )
+    """)
+
+
+def set_const(name: str, content: str):
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    _ensure_const_table(c)
+    c.execute(
+        "INSERT INTO const (name, content) VALUES (?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET content=excluded.content",
+        (name, content)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_const(name: str) -> str:
+    conn = sqlite3.connect(DB_NAME)
+    _ensure_const_table(conn.cursor())
+    row  = conn.execute("SELECT content FROM const WHERE name=?", (name,)).fetchone()
+    conn.commit()
+    conn.close()
+    return row[0] if row else ""
 
 
 # =========================

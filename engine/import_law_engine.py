@@ -368,6 +368,12 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
                 "\n⚠️ Lưu ý: không tách được theo 'Điều X.' — đã dùng cắt đoạn dự phòng, "
                 "trích dẫn số Điều có thể không chính xác cho văn bản này."
             )
+
+        # Refresh the citation-source whitelist so the new so_ky_hieu becomes
+        # citable immediately (see engine.rag_engine.refresh_citation_sources).
+        from engine.rag_engine import refresh_citation_sources
+        refresh_citation_sources()
+
         _set_job(job_id, status="done", message=result_msg)
 
     except Exception as e:

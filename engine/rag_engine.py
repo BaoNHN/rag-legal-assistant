@@ -80,15 +80,123 @@ llm = ChatGroq(
 # =========================
 # CLEAN TEXT
 # =========================
+# Citation footer is appended programmatically by build_citation() after the
+# LLM returns — these markers must never appear in the model's own text. If
+# the model hallucinates its own fake "source" (seen in practice: invented
+# document codes and lecture-material attributions), strip it here so it
+# can't collide with or shadow the real citation.
+_FAKE_CITATION_LINE = re.compile(
+    r"^\s*[-•*]?\s*(📖|📎|Nguồn chính\s*:|Nguồn tham khảo\s*:|Tài liệu\s*:|Nguồn thu thập\s*:)",
+    re.IGNORECASE
+)
+
+
 def clean_answer(text: str) -> str:
     text = re.sub(r"(?i)^xin chào.*?\n", "", text)
     lines = text.split("\n")
     seen, cleaned = set(), []
     for l in lines:
+        if _FAKE_CITATION_LINE.match(l):
+            continue
         if l.strip() and l not in seen:
             cleaned.append(l)
             seen.add(l)
     return "\n".join(cleaned).strip()
+
+
+# =========================
+# CITATION SOURCE WHITELIST
+# ─────────────────────────────
+# Regex-stripping hallucinated citation lines (above) only catches text the
+# model wrote in an obviously footer-shaped way. It can't tell a fabricated
+# so_ky_hieu ("TH-LDN-20-2026") from a real one if it ever ends up in a
+# Document's metadata (stale import, DB drift, manual edit, etc.). This
+# whitelist is the harder guarantee: it's rebuilt from what's *actually*
+# indexed in chroma_db right now, stored in chat.db (Const.CITATION_SOURCE,
+# ";"-joined), and build_citation() refuses to print any so_ky_hieu that
+# isn't in it.
+# =========================
+CITATION_SOURCE_KEY = "CITATION_SOURCE"
+
+
+def refresh_citation_sources():
+    """Rebuild the Const.CITATION_SOURCE whitelist from chroma_db's current
+    so_ky_hieu values. Call this after any change to chroma_db (law import,
+    dataset import) so the whitelist never lags behind what's really indexed.
+    """
+    from database.database import set_const
+
+    try:
+        data = vectorstore.get(include=["metadatas"])
+    except Exception:
+        return
+
+    sources = set()
+    for m in data["metadatas"]:
+        val = (m.get("so_ky_hieu") or "").strip()
+        # ";" is the whitelist's own delimiter — a source containing it would
+        # corrupt parsing, so it's excluded rather than risk a false split/match.
+        if val and ";" not in val:
+            sources.add(val)
+
+    set_const(CITATION_SOURCE_KEY, ";".join(sorted(sources)))
+
+
+def is_known_citation_source(source: str) -> bool:
+    """True if `source` is a so_ky_hieu that's actually indexed in chroma_db
+    (per the last refresh_citation_sources() run)."""
+    from database.database import get_const
+
+    source = (source or "").strip()
+    if not source:
+        return False
+
+    known_raw = get_const(CITATION_SOURCE_KEY)
+    if not known_raw:
+        # Whitelist never populated (e.g. very first run before any import
+        # triggered a refresh) — fail open instead of blanking every citation.
+        return True
+    return source in known_raw.split(";")
+
+
+def list_indexed_sources() -> list:
+    """Distinct so_ky_hieu values currently indexed in chroma_db, with chunk
+    counts — used by the admin UI to show what can be deleted."""
+    try:
+        data = vectorstore.get(include=["metadatas"])
+    except Exception:
+        return []
+
+    counts = Counter((m.get("so_ky_hieu") or "").strip() for m in data["metadatas"])
+    counts.pop("", None)
+    return [
+        {"so_ky_hieu": k, "chunk_count": v}
+        for k, v in sorted(counts.items())
+    ]
+
+
+def delete_source(so_ky_hieu: str) -> int:
+    """Delete every chunk in chroma_db whose so_ky_hieu matches, then rebuild
+    the CITATION_SOURCE whitelist from what's left indexed — this is what
+    keeps the whitelist from lagging a deleted import (see
+    refresh_citation_sources above). Returns the number of chunks deleted.
+    """
+    so_ky_hieu = (so_ky_hieu or "").strip()
+    if not so_ky_hieu:
+        return 0
+
+    existing = vectorstore.get(where={"so_ky_hieu": so_ky_hieu}, include=[])
+    ids = existing.get("ids") or []
+    if ids:
+        vectorstore.delete(ids=ids)
+
+    refresh_citation_sources()
+    return len(ids)
+
+
+# Populate the whitelist once at startup so it reflects chroma_db even if no
+# import happens during this process's lifetime.
+refresh_citation_sources()
 
 
 def similarity(a: str, b: str) -> float:
@@ -175,6 +283,38 @@ def extract_article_number_from_question(question: str) -> str | None:
 
 
 # =========================
+# KEYWORD-PHRASE RECALL
+# ─────────────────────────────
+# Token-overlap scoring against retrieval_keywords/page_content, independent
+# of embedding similarity. Requires a minimum score so a single stray common
+# word doesn't drag in an unrelated article — this is a recall booster for
+# the semantic search, not a replacement for select_best_doc()'s reranking.
+# =========================
+def _keyword_recall(question: str, all_docs: list, top_n: int = 5, min_score: int = 4) -> list:
+    q_words = {w for w in tokenize(question) if w not in STOPWORDS}
+    if not q_words:
+        return []
+
+    scored = []
+    for d in all_docs:
+        kw_field = d.metadata.get("retrieval_keywords", "").lower()
+        if not kw_field:
+            continue
+        content = d.page_content.lower()
+        score = 0
+        for w in q_words:
+            if w in kw_field:
+                score += 3
+            elif w in content:
+                score += 1
+        if score >= min_score:
+            scored.append((score, d))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [d for _, d in scored[:top_n]]
+
+
+# =========================
 # TOPIC-AWARE RETRIEVAL
 # ─────────────────────────────
 # FIX for knowledge questions scoring 57.7/100:
@@ -246,13 +386,29 @@ def retrieve_docs(question: str, rewritten_q: str):
             if kw_hits:
                 return kw_hits[:5]
 
-        # ===== FALLBACK SEMANTIC SEARCH with similarity threshold =====
+        # ===== HYBRID: keyword-phrase recall + semantic search =====
+        # For longer, naturally-phrased questions, bge-small-en-v1.5 (English-
+        # tuned) routinely misses the right article even when its
+        # retrieval_keywords field is an near-exact match for the question —
+        # e.g. "B 16 tuổi có được đăng ký hộ kinh doanh không?" never surfaced
+        # the Điều 20/21 BLDS 2015 doc (keywords: "chưa đủ 18 tuổi", "hộ kinh
+        # doanh"...) in the semantic top-5. Score every doc by keyword-token
+        # overlap independent of embedding similarity, and merge those hits
+        # ahead of the semantic results so select_best_doc() actually gets a
+        # chance to consider them.
+        kw_candidates = _keyword_recall(question, all_docs)
+
         results_with_scores = vectorstore.similarity_search_with_score(rewritten_q, k=5)
-        if not results_with_scores:
-            return []
         # Filter: L2 distance lower = more similar; reject docs above threshold
-        filtered = [doc for doc, score in results_with_scores if score <= SIMILARITY_THRESHOLD]
-        return filtered if filtered else []
+        semantic_candidates = [doc for doc, score in results_with_scores if score <= SIMILARITY_THRESHOLD]
+
+        merged, seen = [], set()
+        for d in kw_candidates + semantic_candidates:
+            if d.page_content not in seen:
+                merged.append(d)
+                seen.add(d.page_content)
+
+        return merged
 
     except Exception:
         return retriever.invoke(rewritten_q)
@@ -375,6 +531,8 @@ def build_prompt(context: str, question: str, q_type: str,
 - Không liệt kê toàn bộ văn bản luật — chỉ trả lời đúng nội dung câu hỏi.
 - CĂN CỨ PHÁP LÝ phải lấy ĐÚNG từ tài liệu được cung cấp. KHÔNG tự suy diễn hay thay đổi số điều luật.
 - Nếu tài liệu có metadata căn cứ pháp lý, phải sử dụng đúng điều luật đó.
+- CHỈ được trích số Điều xuất hiện NGUYÊN VĂN trong phần "Tài liệu" bên dưới. Nếu không thấy số Điều liên quan trong tài liệu, hãy nói rõ là tài liệu không đề cập, KHÔNG được đoán hay lấy từ kiến thức chung.
+- KHÔNG được tự đặt tên nguồn, mã văn bản, tên tác giả/giảng viên hay bất kỳ trích dẫn nào — phần nguồn tài liệu do hệ thống tự thêm vào sau, bạn không viết phần đó.
 {article_hint}
 Tài liệu:
 {context}
@@ -403,14 +561,36 @@ Câu hỏi: {question}
 # =========================
 # BUILD CITATION
 # =========================
-def build_citation(meta: dict, answer: str = "", secondary_docs=None) -> str:
+def build_citation(meta: dict, answer: str = "", secondary_docs=None, context: str = "") -> str:
     article_ref = meta.get("article_reference", "")
     topic = meta.get("topic", "")
     so_ky_hieu = meta.get("so_ky_hieu", "")
     loai = meta.get("loai_van_ban", "")
     source_url = meta.get("source_url", "")
 
-    # Include any additional articles cited in the answer
+    # Refuse to print a document code that isn't actually indexed in chroma_db
+    # right now — catches stale/fabricated so_ky_hieu before it reaches the user.
+    if so_ky_hieu and not is_known_citation_source(so_ky_hieu):
+        so_ky_hieu = ""
+        source_url = ""
+
+    # Include any additional articles cited in the answer — but only ones that
+    # actually appear in the retrieved context. Otherwise a number the model
+    # recalled from general knowledge (or hallucinated) gets credited to a
+    # source document that never mentioned it.
+    #
+    # If a cited number is known (via secondary_docs) to belong to a DIFFERENT
+    # law than this primary document, don't lump it into this line's law_name
+    # grouping — that mislabels it as if it came from the primary document's
+    # law (e.g. "Điều 80; Điều 21 — Nghị định 01/2021/NĐ-CP" when Điều 21 is
+    # actually from Bộ luật Dân sự 91/2015/QH13). It's still shown correctly,
+    # under its own so_ky_hieu, in the "Nguồn tham khảo" section below.
+    other_law_refs = {
+        d.metadata.get("article_reference", "")
+        for d in (secondary_docs or [])
+        if d.metadata.get("so_ky_hieu", "") and d.metadata.get("so_ky_hieu", "") != so_ky_hieu
+    }
+
     if answer:
         cited_nums = re.findall(r'Điều\s+(\d+)', answer)
         meta_num = re.sub(r'[^\d]', '', article_ref)
@@ -418,11 +598,16 @@ def build_citation(meta: dict, answer: str = "", secondary_docs=None) -> str:
         extra = []
         for n in cited_nums:
             ref = f"Điều {n}"
-            if n != meta_num and ref not in seen:
-                extra.append(ref)
-                seen.add(ref)
+            if n == meta_num or ref in seen:
+                continue
+            if ref in other_law_refs:
+                continue
+            if context and ref not in context:
+                continue
+            extra.append(ref)
+            seen.add(ref)
         if extra:
-            article_ref = article_ref + "; " + "; ".join(extra)
+            article_ref = f"{article_ref}; " + "; ".join(extra) if article_ref else "; ".join(extra)
 
     parts = []
     if article_ref:
@@ -459,6 +644,9 @@ def build_citation(meta: dict, answer: str = "", secondary_docs=None) -> str:
             if not s_article or s_article in seen_refs:
                 continue
             seen_refs.add(s_article)
+
+            if s_ky_hieu and not is_known_citation_source(s_ky_hieu):
+                s_ky_hieu = ""
 
             if "67/VBHN" in s_ky_hieu or "59/2020" in s_ky_hieu:
                 s_law = "VBHN 67/VBHN-VPQH 2025"
@@ -611,7 +799,7 @@ def ask_rag(question: str, return_debug: bool = False):
         answer = clean_answer(answer)
 
         # STEP 9: citation (pass answer + extra_docs for secondary sources)
-        final_answer = answer + build_citation(best_doc.metadata, answer, extra_docs)
+        final_answer = answer + build_citation(best_doc.metadata, answer, extra_docs, context)
 
         if return_debug:
             return {

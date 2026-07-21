@@ -258,6 +258,29 @@ main {
 /* ── DIVIDER ── */
 .divider { height: 1px; background: rgba(255,255,255,0.07); margin: 24px 0; }
 
+/* ── MANAGE LAW SOURCES ── */
+.manage-section h3 { font-family: 'Crimson Pro', serif; font-size: 18px; font-weight: 600; color: var(--white); margin-bottom: 4px; }
+.manage-section .manage-desc { font-size: 12.5px; color: var(--gray); margin-bottom: 14px; line-height: 1.5; }
+.law-sources-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+.law-source-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; }
+.law-source-row .ls-name { flex: 1; font-size: 12.5px; color: var(--white); font-weight: 500; overflow-wrap: anywhere; }
+.law-source-row .ls-count { font-size: 11px; color: var(--gray); flex: 0 0 auto; white-space: nowrap; }
+.btn-delete-source {
+  flex: 0 0 auto;
+  background: rgba(214,59,59,0.15);
+  border: 1px solid rgba(214,59,59,0.35);
+  color: #FF8080;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-delete-source:hover:not(:disabled) { background: rgba(214,59,59,0.28); }
+.btn-delete-source:disabled { opacity: .5; cursor: not-allowed; }
+
 /* ── EVALUATION SECTION ── */
 .eval-section h3 {
   font-family: 'Crimson Pro', serif;
@@ -500,6 +523,20 @@ main {
         <div class="s-icon">✅</div>
         <h3>Hoàn tất!</h3>
         <p id="pdfSuccessMsg"></p>
+      </div>
+
+      <!-- ── Manage imported law sources ── -->
+      <div class="divider"></div>
+
+      <div class="manage-section">
+        <h3>🗂️ Văn bản đã import</h3>
+        <p class="manage-desc">
+          Xoá một văn bản sẽ gỡ toàn bộ đoạn đã index khỏi ChromaDB và cập nhật lại
+          danh sách nguồn được phép trích dẫn — không thể hoàn tác.
+        </p>
+        <div class="law-sources-list" id="lawSourcesList">
+          <p style="font-size:12px;color:var(--gray);">Đang tải…</p>
+        </div>
       </div>
     </div><!-- /panelPdf -->
 
@@ -801,6 +838,7 @@ async function handlePdfSubmit() {
         document.getElementById('pdfProgressBanner').style.display = 'none';
         document.getElementById('pdfSuccessMsg').innerHTML =
           (document.getElementById('pdfProgressMsg').textContent || '').replace(/\n/g, '<br/>');
+        loadLawSources();
       }, msg => {
         const e = document.getElementById('pdfGlobalError');
         e.textContent = msg; e.style.display = 'block';
@@ -825,6 +863,68 @@ function showPdfFieldErr(id) {
   const eid = 'err' + id[0].toUpperCase() + id.slice(1);
   document.getElementById(eid).style.display = 'block';
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MANAGE IMPORTED LAW SOURCES
+// ─────────────────────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadLawSources() {
+  const el = document.getElementById('lawSourcesList');
+  el.innerHTML = '<p style="font-size:12px;color:var(--gray);">Đang tải…</p>';
+  try {
+    const res  = await fetch('/list_law_sources');
+    const data = await res.json();
+    if (!Array.isArray(data) || !data.length) {
+      el.innerHTML = '<p style="font-size:12px;color:var(--gray);">Chưa có văn bản nào được import.</p>';
+      return;
+    }
+    el.innerHTML = data.map((s, i) => `
+      <div class="law-source-row">
+        <span class="ls-name">${escapeHtml(s.so_ky_hieu)}</span>
+        <span class="ls-count">${s.chunk_count} đoạn</span>
+        <button class="btn-delete-source" data-idx="${i}" onclick="deleteLawSource(this)">🗑️ Xoá</button>
+      </div>`).join('');
+    el.dataset.sources = JSON.stringify(data.map(s => s.so_ky_hieu));
+  } catch (e) {
+    el.innerHTML = '<p style="font-size:12px;color:var(--red);">❌ Lỗi tải danh sách văn bản.</p>';
+  }
+}
+
+async function deleteLawSource(btn) {
+  const el = document.getElementById('lawSourcesList');
+  const sources = JSON.parse(el.dataset.sources || '[]');
+  const soKyHieu = sources[Number(btn.dataset.idx)];
+  if (!soKyHieu) return;
+
+  if (!confirm(`Xoá toàn bộ văn bản "${soKyHieu}" khỏi ChromaDB? Hành động này không thể hoàn tác.`)) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Đang xoá…';
+  try {
+    const res  = await fetch('/delete_law_source', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ so_ky_hieu: soKyHieu })
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      loadLawSources();
+    } else {
+      alert(data.message || 'Xoá thất bại.');
+      btn.disabled = false;
+      btn.textContent = '🗑️ Xoá';
+    }
+  } catch (e) {
+    alert('Lỗi kết nối khi xoá.');
+    btn.disabled = false;
+    btn.textContent = '🗑️ Xoá';
+  }
+}
+
+loadLawSources();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DATASET IMPORT

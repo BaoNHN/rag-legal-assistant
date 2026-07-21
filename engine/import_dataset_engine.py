@@ -330,6 +330,12 @@ def run_import_dataset(job_id: str, file_path: str, original_filename: str = Non
             f"Bỏ qua (trùng): {skipped}\n"
             f"Tổng trong DB: {total_in_db}"
         )
+
+        # Refresh the citation-source whitelist so new so_ky_hieu values become
+        # citable immediately (see engine.rag_engine.refresh_citation_sources).
+        from engine.rag_engine import refresh_citation_sources
+        refresh_citation_sources()
+
         _set(job_id, status="done", message=result_msg)
 
     except Exception as e:

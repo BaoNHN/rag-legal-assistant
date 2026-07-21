@@ -8,7 +8,7 @@ import re
 import uuid
 import io
 
-from engine.rag_engine import ask_rag
+from engine.rag_engine import ask_rag, list_indexed_sources, delete_source
 from database.database import (
     init_db, get_conn,
     login_user,
@@ -234,6 +234,32 @@ async def import_law(
 async def import_status(job_id: str):
     job = get_job(job_id)
     return job if job else {"status": "unknown"}
+
+
+@app.get("/list_law_sources")
+async def list_law_sources_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return list_indexed_sources()
+
+
+@app.post("/delete_law_source")
+async def delete_law_source_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data       = await request.json()
+    so_ky_hieu = (data.get("so_ky_hieu") or "").strip()
+    if not so_ky_hieu:
+        return JSONResponse({"status": "error", "message": "Thiếu so_ky_hieu"}, status_code=400)
+
+    deleted = delete_source(so_ky_hieu)
+    if deleted == 0:
+        return JSONResponse(
+            {"status": "error", "message": f"Không tìm thấy văn bản '{so_ky_hieu}' trong ChromaDB."},
+            status_code=404,
+        )
+    return {"status": "ok", "deleted": deleted}
 
 
 # ── Import dataset (Excel) ─────────────────────────────────────────────────────
