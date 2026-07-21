@@ -701,7 +701,7 @@ main {
 
       <div class="schema-card">
         <div class="schema-header">
-          💬 Sheet <span class="sheet-badge">Dataset_150</span> / <span class="sheet-badge">Dataset_200</span>
+          🔬 Sheet <span class="sheet-badge">Dataset_150</span> / <span class="sheet-badge">Dataset_200</span> — dùng cho <strong>🔬 Full Evaluation</strong>
         </div>
         <div class="schema-body">
           <div class="schema-field"><span class="sf-name">id</span><span class="sf-desc">Mã câu hỏi (VD: Q001)</span></div>
@@ -712,6 +712,15 @@ main {
           <div class="schema-field"><span class="sf-name">question_type</span><span class="sf-desc">factual / conditional / procedural</span></div>
           <div class="schema-field"><span class="sf-name">difficulty</span><span class="sf-desc">easy / medium / hard</span></div>
           <div class="schema-field"><span class="sf-name">split</span><span class="sf-desc">test / demo (dùng cho đánh giá)</span></div>
+        </div>
+      </div>
+
+      <div class="schema-card">
+        <div class="schema-header">
+          ⚡ Sheet <span class="sheet-badge">Demo_*</span> (VD: Demo_30, Demo_50) — dùng cho <strong>⚡ Quick Evaluation</strong>
+        </div>
+        <div class="schema-body">
+          <div class="schema-field"><span class="sf-name">(cùng cấu trúc)</span><span class="sf-desc">Giống sheet Dataset_* ở trên — tập câu hỏi rút gọn để đánh giá nhanh bằng chấm từ khóa (auto mode), không cần gọi Groq</span></div>
         </div>
       </div>
 
@@ -728,9 +737,12 @@ main {
       </div>
 
       <div class="template-note">
-        💡 File mẫu có sẵn đầy đủ ví dụ cho từng sheet ở trên.<br/>
+        💡 <strong>Quick Evaluation</strong> gộp mọi sheet <span class="sheet-badge">Demo_*</span> — một tập câu hỏi rút gọn, chấm nhanh bằng từ khóa.
+        <strong>Full Evaluation</strong> gộp <em>toàn bộ</em> các sheet <span class="sheet-badge">Dataset_*</span> trong file — đây chính là bộ dữ liệu đầy đủ, không phải bản rút gọn — và chấm bằng Groq LLM theo rubric.<br/>
+        File mẫu minh hoạ đúng quy ước này: sheet <span class="sheet-badge">Demo_Quick_example</span> cho Quick,
+        sheet <span class="sheet-badge">Dataset_example</span> cho Full.<br/>
         <a href="/download_dataset_example" class="btn-example-download">⬇️ Tải example_sheet.xlsx</a><br/>
-        Dùng làm template — thêm dữ liệu vào các sheet tương ứng rồi upload lại.
+        Dùng làm template — thêm dữ liệu vào các sheet tương ứng (giữ đúng tiền tố Demo_ hoặc Dataset_) rồi upload lại.
       </div>
     </div>
 

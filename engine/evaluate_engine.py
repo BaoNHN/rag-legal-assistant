@@ -46,6 +46,20 @@ def _set(job_id: str, **kwargs):
 # must never appear as a selectable evaluation dataset.
 _TEMPLATE_FILENAMES = {"example_sheet.xlsx"}
 
+# ── Quick vs Full evaluation — which sheets each one reads ──────────────────
+# Quick Evaluation (mode=auto, split="demo") combines every sheet prefixed
+# "Demo_" — a fast, small keyword-scored subset.
+# Full Evaluation (mode=llm, split="all") combines every sheet prefixed
+# "Dataset_" — this is genuinely the FULL question set the file ships (all
+# Dataset_* sheets concatenated and deduped by "id", see _combine_sheets
+# below), scored by the Groq LLM rubric instead of keyword matching. It is
+# not a separate curated subset — "Dataset_*" IS the complete dataset.
+# This is why example_sheet.xlsx's template sheets are named Demo_Quick_example
+# (→ Quick) and Dataset_example (→ Full): the prefix is what run_evaluation()
+# and list_available_datasets() actually key off of, so renaming a sheet to
+# anything not starting with "Demo_"/"Dataset_" makes it invisible to both
+# evaluation modes and to the dataset dropdown.
+
 
 def list_available_datasets() -> list:
     """
@@ -110,16 +124,35 @@ RUBRIC_LABELS = {
 
 
 # ── Auto scorer (offline, fast) ───────────────────────────────────────────────
+def _extract_article_numbers(article_ref: str) -> list:
+    """Extract every 'Điều N[letter]' number named in a citation string.
+    article_ref often carries extra numbers that must NOT be folded into the
+    article number — a Khoản number ("Khoản 35 Điều 4"), a decree number/year
+    ("Điều 17 Nghị định 168/2025/NĐ-CP"), or multiple articles joined by ";"
+    ("Điều 27; Điều 38"). Matching only text that follows "Điều" keeps those
+    separate instead of mashing every digit in the string into one number."""
+    return re.findall(r'điều\s+(\d+[a-z]?)', article_ref, flags=re.IGNORECASE)
+
+
+def _extract_law_numbers(article_ref: str) -> list:
+    """Fallback for refs naming a law/decree with no 'Điều' component at all
+    (e.g. "67/VBHN-VPQH 2025; Luật 76/2025/QH15") — match the doc number itself."""
+    return re.findall(r'\d+/\d{4}/[A-ZĐ][A-ZĐ.\-]*', article_ref, flags=re.IGNORECASE)
+
+
 def _auto_score(question: str, generated: str, expected: str,
                 article_ref: str, keywords: str, retrieved_context: str) -> dict:
     gen_lower = generated.lower()
     exp_lower = expected.lower()
-    art_lower = article_ref.lower().replace(" ", "")
     scores    = {}
 
-    art_num = re.sub(r'[^\d]', '', article_ref)
-    cite_pats = [f"điều {art_num}", f"điều {art_num}.", f"điều {art_num},", art_lower]
-    scores["citation_correct"] = 3 if any(p in gen_lower for p in cite_pats) else 0
+    art_nums = _extract_article_numbers(article_ref)
+    if art_nums:
+        cite_ok = any(re.search(rf'điều\s+{re.escape(n)}\b', gen_lower) for n in art_nums)
+    else:
+        law_nums = _extract_law_numbers(article_ref)
+        cite_ok = any(n.lower() in gen_lower for n in law_nums) if law_nums else False
+    scores["citation_correct"] = 3 if cite_ok else 0
 
     kw_list    = [k.strip().lower() for k in keywords.split(';') if k.strip()]
     kw_hits    = sum(1 for kw in kw_list if kw in gen_lower)
@@ -136,9 +169,15 @@ def _auto_score(question: str, generated: str, expected: str,
     else:
         scores["retrieval_relevance"] = 0
 
-    cited_arts = re.findall(r'điều\s+(\d+)', gen_lower)
-    wrong_arts = [a for a in cited_arts if a != art_num]
-    scores["hallucination"] = 3 if len(wrong_arts) == 0 else (2 if len(wrong_arts) <= 1 else 1)
+    if art_nums:
+        correct_nums = set(art_nums)
+        cited_arts   = re.findall(r'điều\s+(\d+[a-z]?)', gen_lower)
+        wrong_arts   = [a for a in cited_arts if a not in correct_nums]
+        scores["hallucination"] = 3 if len(wrong_arts) == 0 else (2 if len(wrong_arts) <= 1 else 1)
+    else:
+        # No "Điều N" in the reference to check cited numbers against (law/decree-
+        # name-only citation) — can't reliably detect a wrong article here.
+        scores["hallucination"] = 3
 
     word_count     = len(generated.split())
     scores["clarity"] = 3 if 30 <= word_count <= 200 else (2 if word_count >= 15 else 1)
