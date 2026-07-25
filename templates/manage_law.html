@@ -181,6 +181,37 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 
 .empty-state { padding: 40px; text-align: center; color: var(--gray); font-size: 13.5px; }
 .load-error { display: none; background: rgba(214,59,59,0.12); border: 1px solid rgba(214,59,59,0.35); color: #FF8080; border-radius: 8px; padding: 10px 13px; font-size: 13px; margin-bottom: 14px; }
+
+/* ── Regression tests tab ── */
+.btn-run-reg {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 20px; background: var(--teal); color: var(--white);
+  border-radius: var(--radius); font-size: 13.5px; font-weight: 600;
+  cursor: pointer; border: none; font-family: 'DM Sans', sans-serif;
+  transition: opacity .18s; margin-bottom: 18px;
+}
+.btn-run-reg:hover:not(:disabled) { opacity: .88; }
+.btn-run-reg:disabled { opacity: .5; cursor: not-allowed; }
+
+.reg-progress { display: none; background: var(--navy2); border-radius: 12px; border: 1px solid rgba(255,255,255,0.07); padding: 16px 18px; margin-bottom: 18px; }
+.reg-prog-label { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--gray); margin-bottom: 8px; }
+.reg-prog-bar-wrap { height: 8px; border-radius: 5px; background: rgba(255,255,255,0.07); overflow: hidden; }
+.reg-prog-bar { height: 100%; width: 0%; background: var(--teal2); transition: width .3s; }
+.reg-msg { font-size: 12.5px; color: var(--gray); margin-top: 8px; }
+
+.reg-run-card { background: var(--navy2); border-radius: 16px; border: 1px solid rgba(255,255,255,0.07); box-shadow: var(--shadow); padding: 18px 20px; margin-bottom: 16px; }
+.reg-run-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.reg-run-time { font-size: 12px; color: var(--gray); }
+.reg-badge { padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.reg-badge-pass { background: rgba(29,155,108,0.15); color: var(--green); }
+.reg-badge-fail { background: rgba(214,59,59,0.15); color: #FF8080; }
+
+.reg-case { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 13px; }
+.reg-case:last-child { border-bottom: none; }
+.reg-case-icon { flex-shrink: 0; font-size: 14px; }
+.reg-case-body { flex: 1; }
+.reg-case-q { color: var(--white); margin-bottom: 3px; }
+.reg-case-meta { color: var(--gray); font-size: 11.5px; }
 </style>
 </head>
 <body>
@@ -200,6 +231,7 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
     <button class="tab-btn active" id="tabLaw" onclick="switchTab('law')">📖 Văn bản pháp luật</button>
     <button class="tab-btn" id="tabDataset" onclick="switchTab('dataset')">📊 Dataset</button>
     <button class="tab-btn" id="tabScenario" onclick="switchTab('scenario')">📚 Tình huống</button>
+    <button class="tab-btn" id="tabRegression" onclick="switchTab('regression')">🧪 Kiểm thử hồi quy</button>
   </div>
 
   <div class="load-error" id="loadError"></div>
@@ -209,8 +241,8 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
     <p class="tab-desc">Xoá một văn bản sẽ gỡ toàn bộ đoạn đã index khỏi ChromaDB và cập nhật lại danh sách nguồn được phép trích dẫn — không thể hoàn tác.</p>
     <div class="table-card">
       <table>
-        <thead><tr><th>Số ký hiệu</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
-        <tbody id="lawTbody"><tr><td colspan="3" class="empty-state">Đang tải…</td></tr></tbody>
+        <thead><tr><th>Số ký hiệu</th><th>Người nhập</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
+        <tbody id="lawTbody"><tr><td colspan="4" class="empty-state">Đang tải…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -220,8 +252,8 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
     <p class="tab-desc">Nhóm theo tên file .xlsx đã tải lên. Các dòng nhập trước khi có tính năng theo dõi tệp sẽ gộp chung vào một mục "không rõ tệp".</p>
     <div class="table-card">
       <table>
-        <thead><tr><th>Tên file</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
-        <tbody id="datasetTbody"><tr><td colspan="3" class="empty-state">Đang tải…</td></tr></tbody>
+        <thead><tr><th>Tên file</th><th>Người nhập</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
+        <tbody id="datasetTbody"><tr><td colspan="4" class="empty-state">Đang tải…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -231,27 +263,50 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
     <p class="tab-desc">Nhóm theo tên file .docx đã tải lên. Xoá sẽ gỡ toàn bộ tình huống của file đó khỏi ChromaDB.</p>
     <div class="table-card">
       <table>
-        <thead><tr><th>Tên file</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
-        <tbody id="scenarioTbody"><tr><td colspan="3" class="empty-state">Đang tải…</td></tr></tbody>
+        <thead><tr><th>Tên file</th><th>Người nhập</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
+        <tbody id="scenarioTbody"><tr><td colspan="4" class="empty-state">Đang tải…</td></tr></tbody>
       </table>
     </div>
+  </div>
+
+  <!-- ══ Kiểm thử hồi quy ══ -->
+  <div class="tab-panel" id="panelRegression">
+    <p class="tab-desc">
+      Kiểm tra nhanh các cặp câu hỏi dễ nhầm loại hình doanh nghiệp (TNHH một/hai thành viên, công ty cổ phần/doanh nghiệp tư nhân...) —
+      không gọi LLM nên chạy trong vài giây. Chỉ lưu lại <strong>2 kết quả gần nhất</strong>.
+    </p>
+    <button class="btn-run-reg" id="btnRunRegression" onclick="runRegressionTests()">▶️ Chạy kiểm thử</button>
+
+    <div class="reg-progress" id="regProgress">
+      <div class="reg-prog-label">
+        <span id="regProgLabel">Đang chạy kiểm thử…</span>
+        <span id="regProgPct">0%</span>
+      </div>
+      <div class="reg-prog-bar-wrap"><div class="reg-prog-bar" id="regProgBar"></div></div>
+      <div class="reg-msg" id="regMsg"></div>
+    </div>
+
+    <div id="regressionResults"></div>
   </div>
 </main>
 
 <script>
-const loaded = { law: false, dataset: false, scenario: false };
+const loaded = { law: false, dataset: false, scenario: false, regression: false };
 
 function switchTab(tab) {
   document.getElementById('panelLaw').classList.toggle('active', tab === 'law');
   document.getElementById('panelDataset').classList.toggle('active', tab === 'dataset');
   document.getElementById('panelScenario').classList.toggle('active', tab === 'scenario');
+  document.getElementById('panelRegression').classList.toggle('active', tab === 'regression');
   document.getElementById('tabLaw').classList.toggle('active', tab === 'law');
   document.getElementById('tabDataset').classList.toggle('active', tab === 'dataset');
   document.getElementById('tabScenario').classList.toggle('active', tab === 'scenario');
+  document.getElementById('tabRegression').classList.toggle('active', tab === 'regression');
 
   if (tab === 'law' && !loaded.law) loadLaw();
   if (tab === 'dataset' && !loaded.dataset) loadDataset();
   if (tab === 'scenario' && !loaded.scenario) loadScenario();
+  if (tab === 'regression' && !loaded.regression) loadRegressionHistory();
 }
 
 function escapeHtml(s) {
@@ -270,12 +325,13 @@ function showLoadError(msg) {
 function renderRows(tbodyId, items, nameKey, onDelete) {
   const tbody = document.getElementById(tbodyId);
   if (!Array.isArray(items) || items.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="3" class="empty-state">Chưa có dữ liệu nào.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Chưa có dữ liệu nào.</td></tr>';
     return;
   }
   tbody.innerHTML = items.map((it, i) => `
     <tr>
       <td>${escapeHtml(it[nameKey])}</td>
+      <td>${escapeHtml(it.importer || 'admin1')}</td>
       <td class="chunk-count">${it.chunk_count} đoạn</td>
       <td><button class="btn-action btn-delete" data-idx="${i}" onclick="${onDelete}(this)">Xoá</button></td>
     </tr>`).join('');
@@ -385,6 +441,100 @@ async function deleteScenario(btn) {
     alert('❌ ' + e.message);
     btn.disabled = false; btn.textContent = 'Xoá';
   }
+}
+
+// ── Kiểm thử hồi quy ──
+let regPollTimer = null;
+
+function renderRegressionRun(run) {
+  const ts = new Date(run.timestamp).toLocaleString('vi-VN');
+  const allPass = run.passed === run.total;
+  const badgeClass = allPass ? 'reg-badge-pass' : 'reg-badge-fail';
+
+  const casesHtml = (run.results || []).map(r => `
+    <div class="reg-case">
+      <span class="reg-case-icon">${r.passed ? '✅' : '❌'}</span>
+      <div class="reg-case-body">
+        <div class="reg-case-q">${escapeHtml(r.question)}</div>
+        <div class="reg-case-meta">
+          expected=${escapeHtml(r.expected)} · got=${escapeHtml(r.got_best || 'none')}
+          ${r.forbidden_present ? ` · ⚠️ lẫn loại hình bị cấm (${escapeHtml(r.forbidden)})` : ''}
+        </div>
+      </div>
+    </div>`).join('');
+
+  return `
+    <div class="reg-run-card">
+      <div class="reg-run-head">
+        <span class="reg-run-time">${ts}</span>
+        <span class="reg-badge ${badgeClass}">${run.passed}/${run.total} đạt</span>
+      </div>
+      ${casesHtml}
+    </div>`;
+}
+
+async function loadRegressionHistory() {
+  loaded.regression = true;
+  document.getElementById('loadError').style.display = 'none';
+  try {
+    const res  = await fetch('/latest_regression_results');
+    if (res.status === 403) { window.location.href = '/'; return; }
+    const data = await res.json();
+    const el = document.getElementById('regressionResults');
+    if (!Array.isArray(data) || data.length === 0) {
+      el.innerHTML = '<div class="table-card"><div class="empty-state">Chưa chạy kiểm thử lần nào. Bấm "Chạy kiểm thử" để bắt đầu.</div></div>';
+      return;
+    }
+    el.innerHTML = data.map(renderRegressionRun).join('');
+  } catch (e) {
+    showLoadError('❌ Lỗi tải kết quả kiểm thử hồi quy: ' + e.message);
+  }
+}
+
+async function runRegressionTests() {
+  const btn = document.getElementById('btnRunRegression');
+  btn.disabled = true;
+  document.getElementById('regProgress').style.display = 'block';
+  document.getElementById('regProgBar').style.width = '0%';
+  document.getElementById('regProgPct').textContent = '0%';
+  document.getElementById('regProgLabel').textContent = '🧪 Đang chạy kiểm thử hồi quy…';
+  document.getElementById('regMsg').textContent = 'Đang khởi động…';
+
+  try {
+    const res  = await fetch('/run_regression_tests', { method: 'POST' });
+    const data = await res.json();
+    if (data.status !== 'ok') throw new Error(data.message || 'Server error');
+    pollRegressionStatus(data.job_id);
+  } catch (e) {
+    document.getElementById('regMsg').textContent = '❌ Lỗi: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+function pollRegressionStatus(jobId) {
+  clearInterval(regPollTimer);
+  regPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/regression_test_status/' + jobId);
+      const job = await res.json();
+
+      const pct = job.progress || 0;
+      document.getElementById('regProgBar').style.width = pct + '%';
+      document.getElementById('regProgPct').textContent = pct + '%';
+      if (job.message) document.getElementById('regMsg').textContent = job.message;
+
+      if (job.status === 'done') {
+        clearInterval(regPollTimer);
+        document.getElementById('regProgress').style.display = 'none';
+        document.getElementById('btnRunRegression').disabled = false;
+        loadRegressionHistory();
+      } else if (job.status === 'failed') {
+        clearInterval(regPollTimer);
+        document.getElementById('regMsg').textContent = job.message || '❌ Kiểm thử thất bại';
+        document.getElementById('btnRunRegression').disabled = false;
+      }
+    } catch (e) { /* keep polling */ }
+  }, 1000);
 }
 
 loadLaw();

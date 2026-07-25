@@ -1,6 +1,9 @@
 /rag_env/
 /chat.db
 
+# Secrets — never commit real API keys
+/groqkey.txt
+
 # Runtime artifacts — regenerated, not needed to run the app
 __pycache__/
 /uploads_tmp/

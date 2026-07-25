@@ -27,6 +27,7 @@ from engine.import_law_engine import run_import, get_job
 from engine.import_scenario_engine import run_import_scenario, get_scenario_job
 from engine.import_dataset_engine import run_import_dataset, get_dataset_job
 from engine.evaluate_engine import run_evaluation, get_eval_job, list_available_datasets, get_latest_eval_result
+from engine.regression_test_engine import run_regression_tests, get_regression_job, get_latest_regression_results
 from engine.import_account_engine import run_import_accounts, build_template_bytes
 
 PASSWORD_RE = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$')
@@ -110,6 +111,7 @@ async def login(request: Request):
         )
     if user:
         request.session["user_id"]   = user["user_id"]
+        request.session["user_name"] = user["user_name"]
         request.session["user_type"] = user["user_type"]
         request.session["role"]      = int(user["role"])
         return {"status": "success", "user_type": user["user_type"]}
@@ -228,6 +230,7 @@ async def import_law(
         f.write(content)
 
     teacher_id = request.session["user_id"]
+    importer   = request.session.get("user_name") or "admin1"
 
     background_tasks.add_task(
         run_import,
@@ -238,6 +241,7 @@ async def import_law(
         nguon_thu_thap=nguon_thu_thap,
         student_id=teacher_id,
         db_conn_factory=get_conn,
+        importer=importer,
     )
 
     return {"status": "ok", "job_id": job_id, "message": "Đã nhận file. Đang xử lý nền…"}
@@ -327,6 +331,32 @@ async def delete_scenario_source_route(request: Request):
     return {"status": "ok", "deleted": deleted}
 
 
+# ── Regression tests (admin, Manage Law → "Kiểm thử hồi quy" tab) ───────────────
+@app.post("/run_regression_tests")
+async def run_regression_tests_route(request: Request, background_tasks: BackgroundTasks):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    job_id = str(uuid.uuid4())
+    background_tasks.add_task(run_regression_tests, job_id=job_id)
+    return {"status": "ok", "job_id": job_id}
+
+
+@app.get("/regression_test_status/{job_id}")
+async def regression_test_status_route(request: Request, job_id: str):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    job = get_regression_job(job_id)
+    return job if job else {"status": "unknown"}
+
+
+@app.get("/latest_regression_results")
+async def latest_regression_results_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return get_latest_regression_results()
+
+
 # ── Import scenario (DOCX case-study set) ───────────────────────────────────────
 @app.post("/import_scenario")
 async def import_scenario_route(
@@ -347,6 +377,7 @@ async def import_scenario_route(
         f.write(content)
 
     teacher_id = request.session["user_id"]
+    importer   = request.session.get("user_name") or "admin1"
 
     background_tasks.add_task(
         run_import_scenario,
@@ -354,6 +385,7 @@ async def import_scenario_route(
         file_path=file_path,
         student_id=teacher_id,
         original_filename=docx_file.filename,
+        importer=importer,
     )
     return {"status": "ok", "job_id": job_id, "message": "Đã nhận file. Đang xử lý nền…"}
 
@@ -409,11 +441,14 @@ async def import_dataset_route(
     with open(file_path, "wb") as f:
         f.write(content)
 
+    importer = request.session.get("user_name") or "admin1"
+
     background_tasks.add_task(
         run_import_dataset,
         job_id=job_id,
         file_path=file_path,
         original_filename=dataset_file.filename,
+        importer=importer,
     )
     return {"status": "ok", "job_id": job_id, "message": "Đang xử lý dataset…"}
 

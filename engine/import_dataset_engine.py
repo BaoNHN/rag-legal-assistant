@@ -84,7 +84,7 @@ def _parse_meta(meta_str: str) -> dict:
 
 
 # ── Sheet processors ──────────────────────────────────────────────────────────
-def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str) -> list:
+def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, importer: str) -> list:
     """Process KB_Articles or KB_Articles_Updated sheet."""
     docs = []
     nguon = f"Luật Doanh nghiệp 2020 - {sheet_name} dataset"
@@ -129,12 +129,13 @@ def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str) ->
                 "char_count":        len(content),
                 "import_source":     "dataset",
                 "source_file":       source_file,
+                "importer":          importer,
             }
         ))
     return docs
 
 
-def _build_update_docs(sheet_df: pd.DataFrame, source_file: str) -> list:
+def _build_update_docs(sheet_df: pd.DataFrame, source_file: str, importer: str) -> list:
     """Process Legal_Update_2025 sheet.
     Actual columns: update_id, date/effective, legal_source,
                     key_change_vi, impact_on_dataset, implemented_in_sheet,
@@ -187,12 +188,13 @@ def _build_update_docs(sheet_df: pd.DataFrame, source_file: str) -> list:
                 "char_count":        len(content),
                 "import_source":     "dataset",
                 "source_file":       source_file,
+                "importer":          importer,
             }
         ))
     return docs
 
 
-def _build_qa_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str) -> list:
+def _build_qa_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, importer: str) -> list:
     """Process any Dataset_* Q&A sheet."""
     docs = []
     for _, row in sheet_df.iterrows():
@@ -234,13 +236,14 @@ def _build_qa_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str) ->
                 "char_count":        len(content),
                 "import_source":     "dataset",
                 "source_file":       source_file,
+                "importer":          importer,
             }
         ))
     return docs
 
 
 # ── Main background task ──────────────────────────────────────────────────────
-def run_import_dataset(job_id: str, file_path: str, original_filename: str = None):
+def run_import_dataset(job_id: str, file_path: str, original_filename: str = None, importer: str = "admin1"):
     """
     Import a dataset Excel file into ChromaDB.
     Auto-detects 150 (KB_Articles) vs 200-updated (KB_Articles_Updated) format.
@@ -262,19 +265,19 @@ def run_import_dataset(job_id: str, file_path: str, original_filename: str = Non
         # ── KB_Articles_Updated (200-updated format) takes priority over KB_Articles
         if 'KB_Articles_Updated' in sheets:
             _set(job_id, message="Xử lý KB_Articles_Updated…")
-            d = _build_kb_docs(xl.parse('KB_Articles_Updated'), 'KB_Articles_Updated', source_file)
+            d = _build_kb_docs(xl.parse('KB_Articles_Updated'), 'KB_Articles_Updated', source_file, importer)
             all_docs.extend(d)
             report.append(f"KB_Articles_Updated: {len(d)} tài liệu")
         elif 'KB_Articles' in sheets:
             _set(job_id, message="Xử lý KB_Articles…")
-            d = _build_kb_docs(xl.parse('KB_Articles'), 'KB_Articles', source_file)
+            d = _build_kb_docs(xl.parse('KB_Articles'), 'KB_Articles', source_file, importer)
             all_docs.extend(d)
             report.append(f"KB_Articles: {len(d)} tài liệu")
 
         # ── Legal_Update_2025 (new in 200-updated)
         if 'Legal_Update_2025' in sheets:
             _set(job_id, message="Xử lý Legal_Update_2025…")
-            d = _build_update_docs(xl.parse('Legal_Update_2025'), source_file)
+            d = _build_update_docs(xl.parse('Legal_Update_2025'), source_file, importer)
             all_docs.extend(d)
             report.append(f"Legal_Update_2025: {len(d)} tài liệu")
 
@@ -285,7 +288,7 @@ def run_import_dataset(job_id: str, file_path: str, original_filename: str = Non
         )
         if qa_sheet:
             _set(job_id, message=f"Xử lý {qa_sheet}…")
-            d = _build_qa_docs(xl.parse(qa_sheet), qa_sheet, source_file)
+            d = _build_qa_docs(xl.parse(qa_sheet), qa_sheet, source_file, importer)
             all_docs.extend(d)
             report.append(f"{qa_sheet}: {len(d)} cặp Q&A")
 
@@ -298,7 +301,11 @@ def run_import_dataset(job_id: str, file_path: str, original_filename: str = Non
         _set(job_id, message=f"Tổng {len(all_docs)} tài liệu — đang kiểm tra trùng lặp…")
 
         # ── Dedup + index
-        embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+        embedding = HuggingFaceEmbeddings(
+            model_name="BAAI/bge-m3",
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
         vs        = Chroma(persist_directory=DB_PATH, embedding_function=embedding)
 
         existing         = vs.get(include=["metadatas"])

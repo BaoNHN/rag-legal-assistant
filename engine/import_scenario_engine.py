@@ -171,7 +171,7 @@ def parse_scenario_docx(path: str) -> list:
     return [c for c in cases if c["case_id"] and c["scenario"]]
 
 
-def _build_case_doc(case: dict, source_label: str) -> Document:
+def _build_case_doc(case: dict, source_label: str, importer: str) -> Document:
     lines = [
         f"Tình huống pháp lý: {case['topic']}",
         f"Mô tả: {case['scenario']}",
@@ -207,12 +207,14 @@ def _build_case_doc(case: dict, source_label: str) -> Document:
             "legal_basis":        "; ".join(case["legal_basis"]),
             "retrieval_keywords": "; ".join(case["keywords"]),
             "char_count":         len(content),
+            "importer":           importer,
         },
     )
 
 
 # ── Main background job ───────────────────────────────────────────────────────
-def run_import_scenario(job_id: str, file_path: str, student_id: int, original_filename: str = None):
+def run_import_scenario(job_id: str, file_path: str, student_id: int,
+                        original_filename: str = None, importer: str = "admin1"):
     """Parse a scenario DOCX and add one chunk per case to ChromaDB (no wipe,
     skip case_ids already indexed)."""
     _set_job(job_id, status="running", message="Đang đọc file DOCX…")
@@ -231,9 +233,13 @@ def run_import_scenario(job_id: str, file_path: str, student_id: int, original_f
 
         _set_job(job_id, message=f"Đã đọc {len(cases)} tình huống — đang kiểm tra trùng lặp…")
 
-        docs = [_build_case_doc(c, source_label) for c in cases]
+        docs = [_build_case_doc(c, source_label, importer) for c in cases]
 
-        embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+        embedding = HuggingFaceEmbeddings(
+            model_name="BAAI/bge-m3",
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
         vs        = Chroma(persist_directory=DB_PATH, embedding_function=embedding)
 
         existing         = vs.get(include=["metadatas"])

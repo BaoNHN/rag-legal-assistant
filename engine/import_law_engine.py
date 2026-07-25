@@ -172,9 +172,58 @@ def _ocr_page(detector, pil_image) -> str:
     return "\n".join(lines)
 
 
+# ── Sub-split an over-long single article ─────────────────────────────────────
+# A handful of articles (e.g. Điều 74) run to 10,000+ characters — one chunk
+# that long makes the embedding represent too much at once and forces the LLM
+# to read a huge context. This splits only within a single over-long article,
+# never merging content across articles: short/normal articles pass through
+# _segment() untouched (single chunk), only chunks > 3000 chars get sub-split
+# here into 2000–3000 char pieces with 200–300 char overlap.
+_ARTICLE_HEADER_RE = _re.compile(r'^(Điều\s+\d+[a-z]?[.,]\s*[^\n]*)', _re.IGNORECASE)
+
+
+def _split_long_segment(seg: str, size: int = 2800, overlap: int = 250) -> list:
+    if len(seg) <= 3000:
+        return [seg]
+
+    header_match = _ARTICLE_HEADER_RE.match(seg)
+    header = header_match.group(1).strip() if header_match else ""
+
+    pieces = []
+    i, n = 0, len(seg)
+    while i < n:
+        end = min(i + size, n)
+        if end < n:
+            # Prefer cutting at a paragraph/sentence boundary near the
+            # target size instead of mid-word/mid-sentence.
+            boundary = seg.rfind('\n', i + 500, end)
+            if boundary == -1:
+                boundary = seg.rfind('. ', i + 500, end)
+            if boundary != -1:
+                end = boundary + 1
+        piece = seg[i:end].strip()
+        if piece:
+            pieces.append(piece)
+        if end >= n:
+            break
+        i = end - overlap
+
+    # run_import() re-derives article_number/article_reference per chunk by
+    # regex-matching "Điều N." at the start of its text — without this, only
+    # the first piece would carry that header and every later piece would
+    # silently fall back to an untagged (uncitable) chunk.
+    if header:
+        for k in range(1, len(pieces)):
+            if not _ARTICLE_HEADER_RE.match(pieces[k]):
+                pieces[k] = f"{header} (tiếp theo)\n{pieces[k]}"
+
+    return pieces
+
+
 # ── Segment full text into articles ──────────────────────────────────────────
 def _segment(full_text: str) -> tuple:
-    """Split into one chunk per 'Điều X.' (legal article).
+    """Split into one chunk per 'Điều X.' (legal article), sub-splitting any
+    single article over 3000 chars (see _split_long_segment above).
 
     Returns (segments, matched_by_article). matched_by_article is False when
     the article-boundary regex couldn't find enough headers and a fixed-size
@@ -187,9 +236,15 @@ def _segment(full_text: str) -> tuple:
     splits = _re.split(pattern, clean, flags=_re.MULTILINE)
     segs = [s.strip() for s in splits if len(s.strip()) > 50]
     if len(segs) >= 5:
-        return segs, True
+        expanded = []
+        for s in segs:
+            expanded.extend(_split_long_segment(s))
+        return expanded, True
 
-    # fallback: fixed chunks — article boundaries could not be detected
+    # fallback: fixed chunks — article boundaries could not be detected.
+    # Stays at the coarser 3000/300 sizing (not 2000-3000/200-300) since
+    # these chunks straddle unknown article boundaries anyway — there's no
+    # single article's worth of content to preserve intact here.
     size, overlap, segs = 3000, 300, []
     i = 0
     while i < len(clean):
@@ -245,7 +300,7 @@ def _extract_text_docx(docx_path: str) -> dict:
 # ── Main background job ───────────────────────────────────────────────────────
 def run_import(job_id: str, file_path: str, so_ky_hieu: str,
                loai_van_ban: str, nguon_thu_thap: str,
-               student_id: int, db_conn_factory):
+               student_id: int, db_conn_factory, importer: str = "admin1"):
     """
     Full pipeline: auto-detect file type (PDF / DOCX) → extract text or OCR →
     segment → embed → add to ChromaDB (no wipe).
@@ -328,6 +383,7 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
                 "char_count": len(seg),
                 "segment_index": i,
                 "import_source": "law",
+                "importer": importer,
             }
             if m:
                 # Real article boundary — safe to tag with its true number.
@@ -344,7 +400,11 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
         # ── 6. Add to ChromaDB (no wipe, skip existing so_ky_hieu) ──
         _set_job(job_id, message=f"Tải {len(docs)} đoạn lên ChromaDB…")
 
-        embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+        embedding = HuggingFaceEmbeddings(
+            model_name="BAAI/bge-m3",
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
         vs = Chroma(persist_directory=DB_PATH, embedding_function=embedding)
 
         # Skip if already exists

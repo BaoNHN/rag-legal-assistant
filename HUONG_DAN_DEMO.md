@@ -16,7 +16,7 @@
 8. [Demo Import Dataset Excel — Vai Trò Giáo Viên](#8-demo-import-dataset-excel--vai-trò-giáo-viên)
 9. [Demo Đánh Giá Hệ Thống RAG — Vai Trò Giáo Viên](#9-demo-đánh-giá-hệ-thống-rag--vai-trò-giáo-viên)
 10. [Demo Quản Lý Tài Khoản — Vai Trò Admin](#10-demo-quản-lý-tài-khoản--vai-trò-admin)
-11. [Demo Quản Lý Văn Bản (Manage Law) — Vai Trò Admin](#11-demo-quản-lý-văn-bản-manage-law--vai-trò-admin)
+11. [Demo Quản Lý Văn Bản (Manage Law) + Kiểm Thử Hồi Quy — Vai Trò Admin](#11-demo-quản-lý-văn-bản-manage-law--vai-trò-admin)
 12. [Câu Hỏi Demo Gợi Ý](#12-câu-hỏi-demo-gợi-ý)
 13. [Kiến Trúc Kỹ Thuật](#13-kiến-trúc-kỹ-thuật)
 14. [Xử Lý Sự Cố](#14-xử-lý-sự-cố)
@@ -31,7 +31,7 @@
 |---|---|
 | Backend | FastAPI (Python 3.10+), chạy bằng Uvicorn |
 | Vector Database | ChromaDB |
-| Embedding Model | `BAAI/bge-small-en-v1.5` (HuggingFace) |
+| Embedding Model | `BAAI/bge-m3` (HuggingFace, đa ngôn ngữ — đổi từ `bge-small-en-v1.5` ngày 2026-07-25, xem mục 14) |
 | LLM | Groq — `llama-3.1-8b-instant` |
 | OCR tiếng Việt | VietOCR (`vgg_transformer`) |
 | Trích xuất PDF/DOCX | pypdf (text số) + pdf2image/Poppler (OCR scan) + python-docx |
@@ -123,7 +123,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8000
 
 Mở trình duyệt và truy cập: **http://127.0.0.1:8000**
 
-> **Lần đầu khởi động:** Hệ thống tự động tạo file `chat.db` và seed 3 tài khoản mặc định (học sinh, giáo viên, admin). ChromaDB cũng sẽ tải embedding model từ HuggingFace (cần kết nối Internet lần đầu). `engine/rag_engine.py` còn tự chạy 2 tác vụ bảo trì lúc khởi động: làm mới whitelist trích dẫn (`refresh_citation_sources`) và gắn nhãn nguồn gốc cho các đoạn dữ liệu cũ chưa được đánh dấu (`backfill_import_source_tags`, xem mục 13.4) — cả hai đều an toàn khi chạy lại nhiều lần.
+> **Lần đầu khởi động:** Hệ thống tự động tạo file `chat.db` và seed 3 tài khoản mặc định (học sinh, giáo viên, admin). ChromaDB cũng sẽ tải embedding model từ HuggingFace (cần kết nối Internet lần đầu — `BAAI/bge-m3` khoảng 2GB, chỉ tải một lần rồi cache). `engine/rag_engine.py` còn tự chạy 3 tác vụ bảo trì lúc khởi động: làm mới whitelist trích dẫn (`refresh_citation_sources`), gắn nhãn nguồn gốc cho các đoạn dữ liệu cũ chưa được đánh dấu (`backfill_import_source_tags`, xem mục 13.4), và gắn nhãn người nhập mặc định `"admin1"` cho các đoạn nhập trước khi có tính năng theo dõi người nhập (`backfill_importer_tags`) — cả ba đều an toàn khi chạy lại nhiều lần.
 
 ---
 
@@ -251,6 +251,7 @@ Nhấn **"🚀 Tải lên & Xử lý AI"** để bắt đầu.
 - PDF văn bản số (có thể chọn/copy chữ) được trích xuất trực tiếp — **nhanh, không cần OCR**
 - OCR chỉ chạy khi phát hiện PDF là bản scan, mặc định trên **CPU** — file 50 trang có thể mất 10–30 phút
 - Nếu hệ thống **không nhận diện được ranh giới "Điều X."** trong văn bản (văn bản không có tiêu đề điều rõ ràng), quy trình sẽ dùng cắt đoạn dự phòng (3000 ký tự/đoạn) và **báo cảnh báo rõ ràng** trong tiến trình + trong chat "Import new law" — các đoạn này sẽ không có trích dẫn số Điều (thay vì âm thầm gán số Điều sai như trước)
+- Một Điều đơn lẻ dài hơn 3000 ký tự (VD Điều 74, ~13.400 ký tự) được **chia nhỏ tiếp** thành các đoạn 2000–3000 ký tự, overlap 200–300 ký tự (`_split_long_segment` trong `import_law_engine.py`, thêm ngày 2026-07-25) — mỗi đoạn con vẫn giữ đúng `article_number`/`article_reference` của Điều gốc nên trích dẫn không bị ảnh hưởng. Khác với cắt đoạn dự phòng ở trên, cách này **không** gộp nội dung của nhiều Điều khác nhau vào cùng một đoạn.
 - Để dùng **GPU** (nhanh hơn đáng kể), tạo file `.device_config` tại thư mục gốc:
   ```
   DEVICE=cuda
@@ -456,6 +457,17 @@ Nhấn **"Xoá"** ở dòng tương ứng → xác nhận → hệ thống xoá 
 
 > **Không thể hoàn tác.** Với văn bản pháp luật/dataset, nếu xoá nhầm thì phải import lại từ file gốc.
 
+> **Cập nhật 2026-07-25:** Cả 3 bảng (Văn bản pháp luật/Dataset/Tình huống) có thêm cột **"Người nhập"** — lấy từ `request.session["user_name"]` tại thời điểm import (fallback `admin1` nếu thiếu). Dữ liệu import từ trước ngày này không có tên người nhập chính xác.
+
+### Bước 3: Tab Kiểm Thử Hồi Quy (mới, 2026-07-25)
+
+Tab thứ 4 **"🧪 Kiểm thử hồi quy"** chạy bộ test nhanh (không gọi LLM, không tốn quota Groq) kiểm tra 4 cặp câu hỏi dễ nhầm loại hình doanh nghiệp (VD "TNHH một thành viên" vs "TNHH hai thành viên trở lên") thẳng qua `retrieve_docs → filter_compatible_docs → select_best_doc` — bảo vệ chống hồi quy cho cơ chế lọc entity-type đã thêm ngày 2026-07-25 (xem mục 14).
+
+1. Bấm **"▶️ Chạy kiểm thử"** — job chạy nền, thanh tiến trình cập nhật theo từng câu hỏi (`GET /regression_test_status/<job_id>`)
+2. Sau khi xong, mỗi câu hiện ✅/❌ kèm `expected`/`got_best`, và cảnh báo nếu tài liệu bị cấm (entity-type sai) vẫn lọt vào danh sách sau lọc
+3. Hệ thống chỉ giữ **2 lần chạy gần nhất** trong `regression_results_history.json` — mở lại tab sẽ tự hiện các lần chạy đã lưu (`GET /latest_regression_results`) mà không cần chạy lại
+4. Nên chạy lại sau khi sửa logic truy xuất/rerank trong `engine/rag_engine.py`, hoặc sau khi import dữ liệu luật mới — xem thêm `evaluate/retrieval_regression_tests.py` (dùng chung logic với `engine/regression_test_engine.py`, script CLI này cũng chạy độc lập được: `python evaluate/retrieval_regression_tests.py`)
+
 ---
 
 ## 12. Câu Hỏi Demo Gợi Ý
@@ -615,6 +627,7 @@ rag-legal-assistant-master/
 - **`CITATION_SOURCE`** (lưu trong `chat.db`, bảng `const`) là danh sách mọi `so_ky_hieu` **đang thực sự có mặt** trong ChromaDB tại thời điểm làm mới gần nhất. `build_citation()` trong `rag_engine.py` từ chối in ra bất kỳ số ký hiệu nào không nằm trong danh sách này — chặn trường hợp trích dẫn tới văn bản đã bị xoá hoặc metadata bị hỏng/giả mạo. Danh sách này tự làm mới sau mỗi lần import (mục 6, 8) và sau mỗi lần xoá (mục 11).
 - Đoạn dữ liệu từ **Văn bản tình huống** (mục 7) không có `so_ky_hieu` nên không nằm trong whitelist — đây là chủ đích, không phải thiếu sót (xem giải thích ở mục 7).
 - **`import_source`** là nhãn nội bộ (`"law"` / `"dataset"` / `"scenario"`) gắn vào từng đoạn dữ liệu để trang Manage Law (mục 11) biết đoạn đó thuộc luồng import nào. Dữ liệu import **trước khi** nhãn này tồn tại được tự động gắn nhãn suy luận lúc khởi động ứng dụng (`backfill_import_source_tags()`, chạy một lần, an toàn khi gọi lại nhiều lần) — dựa trên các dấu hiệu sẵn có trong metadata (VD: có `segment_index` → `"law"`; `doc_type="scenario_qa"` → `"scenario"`; `so_ky_hieu` khớp mã dataset mặc định và không có `segment_index` → `"dataset"`). Vài đoạn tham khảo thêm bằng tay qua `database/reference_source.py` (ngoài 3 luồng UI) không được gắn nhãn này, nên sẽ không xuất hiện ở tab Dataset/Tình huống của Manage Law — nhưng vẫn xuất hiện đúng ở tab Văn bản pháp luật (nhóm theo `so_ky_hieu`).
+- **`importer`** (thêm ngày 2026-07-25) ghi lại `user_name` của giáo viên/admin thực hiện import, hiển thị ở cột "Người nhập" trong cả 3 tab của Manage Law (mục 11). Dữ liệu import **trước khi** có trường này được gắn mặc định `"admin1"` lúc khởi động (`backfill_importer_tags()`, cùng cơ chế idempotent như `backfill_import_source_tags()` ở trên).
 
 ### 13.5 Schema Database SQLite
 
@@ -627,9 +640,30 @@ const     (name, content)   # key/value — VD name="CITATION_SOURCE" (xem mục
 
 Chat giáo viên và học sinh được tách biệt hoàn toàn theo cột `role`, ngay cả khi `user_id` trùng nhau. Admin dùng chung không gian chat với vai trò Teacher (`role=1`).
 
+### 13.6 Bộ Lọc Loại Hình Doanh Nghiệp & Kiểm Tra Trích Dẫn Sau Sinh (thêm 2026-07-25)
+
+- **`filter_compatible_docs()`** (`rag_engine.py`): trước khi rerank, loại khỏi danh sách ứng viên mọi tài liệu có loại hình doanh nghiệp xung đột với câu hỏi (VD câu hỏi về "TNHH một thành viên" sẽ loại tài liệu "TNHH hai thành viên trở lên", công ty cổ phần, doanh nghiệp tư nhân, công ty hợp danh). Loại hình được suy luận bằng `infer_doc_entity()` — quét `page_content`/`topic`/`retrieval_keywords`/`title` vì metadata hiện tại chưa có trường `entity_type` riêng. Tài liệu không xác định được loại hình (điều khoản áp dụng chung) luôn được giữ lại thay vì loại nhầm.
+- **`validate_answer_citations()`** (`rag_engine.py`): sau khi LLM sinh câu trả lời, nếu bất kỳ số Điều nào xuất hiện trong phần **thân** câu trả lời không có mặt trong context đã truy xuất, toàn bộ câu trả lời bị từ chối (trả về cảnh báo) thay vì hiển thị — khác với whitelist `CITATION_SOURCE` ở mục 13.4 vốn chỉ kiểm tra dòng trích dẫn cuối, cơ chế này chặn cả trường hợp LLM viết sai số Điều ngay trong nội dung trả lời.
+- Xem thêm `evaluate/retrieval_regression_tests.py` — bộ test nhanh (không gọi LLM) kiểm tra các cặp câu hỏi dễ nhầm loại hình doanh nghiệp, nên chạy lại sau khi sửa logic truy xuất/rerank hoặc import dữ liệu mới.
+
 ---
 
 ## 14. Xử Lý Sự Cố
+
+### Ứng Dụng Không Khởi Động Được — `ValueError: ... torch.load ...` / `check_torch_load_is_safe`
+
+**Triệu chứng:** `python app.py` (hoặc bất kỳ script nào `import engine.rag_engine`) crash ngay khi tải embedding model, log có dòng `Due to a serious vulnerability issue in torch.load, ... we now require users to upgrade torch to at least v2.6`.
+
+**Nguyên nhân (2026-07-25):** Đổi embedding model sang `BAAI/bge-m3` (đa ngôn ngữ, xem mục 1 và 13.6) — `transformers` chặn load checkpoint qua `torch.load` nếu torch < 2.6 (bản vá CVE-2025-32434). Môi trường có sẵn trước đó thường cài torch 2.5.x.
+
+**Khắc phục:**
+```bash
+pip uninstall torch torchvision -y
+pip install "torch>=2.6" torchvision --index-url https://download.pytorch.org/whl/cpu
+```
+Dùng `--index-url .../cu118` hoặc `.../cu121` thay cho `/cpu` nếu cần tăng tốc OCR bằng GPU NVIDIA (xem `install.bat` hoặc mục "OCR Chạy Chậm" bên dưới) — không bắt buộc phải có GPU để chạy embedding, `bge-m3` được cấu hình chạy CPU mặc định trong cả 4 nơi dùng đến nó (`rag_engine.py` + 3 file `import_*_engine.py`).
+
+---
 
 ### Lỗi Không Kết Nối Groq
 
@@ -651,12 +685,11 @@ Chat giáo viên và học sinh được tách biệt hoàn toàn theo cột `ro
 **Nguyên nhân:** Chưa có dữ liệu trong ChromaDB.
 
 **Khắc phục:**
-```bash
-# Import trực tiếp từ file PDF/DOCX qua giao diện giáo viên (xem mục 6)
-# Hoặc import bộ tình huống DOCX (xem mục 7)
-# Hoặc import nhanh từ dataset Excel có sẵn qua giao diện (xem mục 8)
-python database/build_db_from_dataset_updated.py
-```
+- Import trực tiếp từ file PDF/DOCX qua giao diện giáo viên (xem mục 6)
+- Hoặc import bộ tình huống DOCX (xem mục 7)
+- Hoặc import nhanh từ dataset Excel có sẵn qua giao diện (xem mục 8)
+
+> ⚠️ **Hạn chế dùng** các script rời trong `database/` (`build_db_from_pdf.py`, `build_db_from_dataset_updated.py`, `build_db_doc.py`...) để nạp dữ liệu — đây là script bootstrap cũ, không được bảo trì thường xuyên như giao diện Import. Ngày 2026-07-25 đã rà soát và đổi toàn bộ embedding hardcode trong các script này từ `bge-small-en-v1.5` sang `bge-m3` cho khớp với `chroma_db` hiện tại (1024 chiều), nhưng ưu tiên vẫn nên dùng giao diện Import (mục 6/7/8) — nơi được kiểm thử và cập nhật sát nhất với engine hiện hành.
 
 ---
 
@@ -723,11 +756,7 @@ DEVICE=cuda
 - Cả 2 script giờ **cảnh báo rõ ràng** thay vì âm thầm gán số Điều giả nếu vẫn rơi vào fallback
 - `engine/rag_engine.py` được thêm 2 cơ chế truy xuất mới: (1) tra thẳng theo metadata khi câu hỏi có dạng "Điều N", (2) quét từ khóa trực tiếp cho câu hỏi ngắn (≤5 từ, VD "Tập đoàn") — thay vì chỉ dựa vào tìm kiếm ngữ nghĩa
 
-**Nếu ChromaDB hiện tại vẫn còn dữ liệu luật bị chunk sai** (dấu hiệu: metadata `article_number` trùng với `segment_index + 1`), chạy:
-```bash
-python database/rebuild_law_from_docx.py
-```
-Script này xóa các đoạn văn bản 67/VBHN-VPQH bị chunk sai và build lại đúng theo từng Điều từ file DOCX gốc (`67_VBHN-VPQH_671127 (1).docx`), **không đụng** tới dữ liệu Q&A/KB_Articles từ Dataset Excel.
+**Nếu ChromaDB hiện tại vẫn còn dữ liệu luật bị chunk sai** (dấu hiệu: metadata `article_number` trùng với `segment_index + 1`), có thể chạy `python database/rebuild_law_from_docx.py` để build lại đúng theo từng Điều từ file DOCX gốc — script này đã dùng đúng embedding `BAAI/bge-m3` (đã sửa ngày 2026-07-25), khớp với phần dữ liệu còn lại trong `chroma_db`.
 
 ---
 

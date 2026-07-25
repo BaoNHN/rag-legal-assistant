@@ -145,7 +145,7 @@
   <tr><th>Component</th><th>Technology</th><th>Purpose</th></tr>
   <tr><td>Web Framework</td><td>FastAPI + Uvicorn</td><td>HTTP API &amp; HTML interface</td></tr>
   <tr><td>LLM</td><td>Groq API (llama-3.1-8b-instant)</td><td>Answer generation</td></tr>
-  <tr><td>Embeddings</td><td>BAAI/bge-small-en-v1.5 (HuggingFace)</td><td>Semantic search vectors</td></tr>
+  <tr><td>Embeddings</td><td>BAAI/bge-m3 (HuggingFace)</td><td>Semantic search vectors</td></tr>
   <tr><td>Vector DB</td><td>ChromaDB (local, persisted)</td><td>Law document retrieval</td></tr>
   <tr><td>Chat DB</td><td>SQLite (chat.db)</td><td>Users, sessions, history</td></tr>
   <tr><td>OCR</td><td>VietOCR + pdf2image + Poppler</td><td>PDF law document ingestion</td></tr>
@@ -306,7 +306,7 @@ python database/build_db_from_txt.py
 # OR from PDF files:
 python database/build_db_from_pdf.py</code></pre>
     <div class="alert alert-warning">
-      <strong>Note:</strong> The HuggingFace embedding model (BAAI/bge-small-en-v1.5, ~130 MB) will be downloaded automatically on first run. Ensure internet access.
+      <strong>Note:</strong> The HuggingFace embedding model (BAAI/bge-m3, ~2.2 GB) will be downloaded automatically on first run. Ensure internet access.
     </div>
   </div>
 </div>
@@ -504,7 +504,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Pre-download the embedding model so container doesn't need internet at runtime
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"
 
 EXPOSE 8000
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]</code></pre>
@@ -624,7 +624,7 @@ python start_ngrok.py
   <tr><td><code>chroma_db not found</code></td><td>Vector store was not built yet</td><td>Run <code>python database/build_db_from_dataset.py</code></td></tr>
   <tr><td>Groq <code>429 Too Many Requests</code></td><td>Rate limit exceeded</td><td>The app retries automatically; upgrade Groq plan for higher limits</td></tr>
   <tr><td>Session lost on restart</td><td>Session secret changes between restarts</td><td>Set a fixed <code>SESSION_SECRET</code> env variable (not random each time)</td></tr>
-  <tr><td>App slow to start</td><td>HuggingFace model downloading (first run)</td><td>Pre-download model with: <code>python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"</code></td></tr>
+  <tr><td>App slow to start</td><td>HuggingFace model downloading (first run)</td><td>Pre-download model with: <code>python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"</code></td></tr>
   <tr><td>Nginx 502 Bad Gateway</td><td>FastAPI not running or wrong port</td><td>Check <code>sudo systemctl status rag-legal</code> and that port 8000 is listening</td></tr>
   <tr><td>File upload fails (&gt;1MB)</td><td>Nginx default body size limit</td><td>Add <code>client_max_body_size 50M;</code> to Nginx config</td></tr>
 </table>

@@ -1,5 +1,6 @@
 import os
 import re
+import unicodedata
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
@@ -58,7 +59,11 @@ with open(os.path.join(BASE_DIR, "groqkey.txt"), "r") as f:
 # =========================
 # EMBEDDING + VECTORSTORE
 # =========================
-embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+embedding = HuggingFaceEmbeddings(
+    model_name="BAAI/bge-m3",
+    model_kwargs={"device": "cpu"},
+    encode_kwargs={"normalize_embeddings": True},
+)
 
 vectorstore = Chroma(
     persist_directory=DB_PATH,
@@ -102,6 +107,22 @@ def clean_answer(text: str) -> str:
             cleaned.append(l)
             seen.add(l)
     return "\n".join(cleaned).strip()
+
+
+def validate_answer_citations(answer: str, context: str) -> bool:
+    """Last-resort gate before an answer is shown to the user: every "Điều N"
+    the model wrote in its own prose must actually appear in the retrieved
+    context. build_citation() already excludes ungrounded article numbers
+    from the citation *footer* it appends — this catches the case that
+    slips past that: a wrong/invented article number left sitting in the
+    answer BODY text, which build_citation() never touches, still reading as
+    trustworthy to the user even with no citation attached to it."""
+    answer_articles = set(re.findall(r'Điều\s+(\d+[a-z]?)', answer or "", flags=re.IGNORECASE))
+    if not answer_articles:
+        return True
+
+    context_lower = (context or "").lower()
+    return all(f"điều {n}" in context_lower for n in answer_articles)
 
 
 # =========================
@@ -167,10 +188,12 @@ def list_indexed_sources() -> list:
     except Exception:
         return []
 
-    counts = Counter((m.get("so_ky_hieu") or "").strip() for m in data["metadatas"])
+    metas = data["metadatas"]
+    counts = Counter((m.get("so_ky_hieu") or "").strip() for m in metas)
     counts.pop("", None)
+    importers = _first_importer_by_key(metas, "so_ky_hieu")
     return [
-        {"so_ky_hieu": k, "chunk_count": v}
+        {"so_ky_hieu": k, "chunk_count": v, "importer": importers.get(k, DEFAULT_IMPORTER)}
         for k, v in sorted(counts.items())
     ]
 
@@ -206,6 +229,49 @@ def delete_source(so_ky_hieu: str) -> int:
 # code as the real imported law text).
 # =========================
 UNKNOWN_SOURCE_FILE_LABEL = "(không rõ tệp — nhập trước khi có tính năng theo dõi tệp)"
+
+# Chunks imported before the "importer" field existed carry no such tag —
+# backfill_importer_tags() below stamps them with this placeholder rather
+# than leaving the admin UI's "Người nhập" column blank for old data.
+DEFAULT_IMPORTER = "admin1"
+
+
+def _first_importer_by_key(metas: list, key: str, default_group: str = "") -> dict:
+    """First non-empty `importer` value seen per distinct `key` value —
+    used to show one importer per grouped row in the admin source tables.
+    `default_group` mirrors the same fallback label the row-grouping Counter
+    uses (e.g. UNKNOWN_SOURCE_FILE_LABEL) so groups line up."""
+    result = {}
+    for m in metas:
+        group = (m.get(key) or "").strip() or default_group
+        if group and group not in result:
+            result[group] = m.get("importer") or DEFAULT_IMPORTER
+    return result
+
+
+def backfill_importer_tags():
+    """One-time migration for chunks indexed before the importer field
+    existed. Idempotent — only touches chunks missing it, so it's cheap and
+    safe to call on every startup."""
+    try:
+        data = vectorstore.get(include=["metadatas"])
+    except Exception:
+        return
+
+    ids   = data.get("ids") or []
+    metas = data.get("metadatas") or []
+
+    update_ids, update_metas = [], []
+    for doc_id, m in zip(ids, metas):
+        if m.get("importer"):
+            continue
+        new_meta = dict(m)
+        new_meta["importer"] = DEFAULT_IMPORTER
+        update_ids.append(doc_id)
+        update_metas.append(new_meta)
+
+    if update_ids:
+        vectorstore._collection.update(ids=update_ids, metadatas=update_metas)
 
 
 def backfill_import_source_tags():
@@ -255,8 +321,13 @@ def list_dataset_sources() -> list:
     except Exception:
         return []
 
-    counts = Counter((m.get("source_file") or UNKNOWN_SOURCE_FILE_LABEL).strip() for m in data["metadatas"])
-    return [{"name": k, "chunk_count": v} for k, v in sorted(counts.items())]
+    metas = data["metadatas"]
+    counts = Counter((m.get("source_file") or UNKNOWN_SOURCE_FILE_LABEL).strip() for m in metas)
+    importers = _first_importer_by_key(metas, "source_file", UNKNOWN_SOURCE_FILE_LABEL)
+    return [
+        {"name": k, "chunk_count": v, "importer": importers.get(k, DEFAULT_IMPORTER)}
+        for k, v in sorted(counts.items())
+    ]
 
 
 def delete_dataset_source(source_file: str) -> int:
@@ -285,8 +356,13 @@ def list_scenario_sources() -> list:
     except Exception:
         return []
 
-    counts = Counter((m.get("nguon_thu_thap") or UNKNOWN_SOURCE_FILE_LABEL).strip() for m in data["metadatas"])
-    return [{"name": k, "chunk_count": v} for k, v in sorted(counts.items())]
+    metas = data["metadatas"]
+    counts = Counter((m.get("nguon_thu_thap") or UNKNOWN_SOURCE_FILE_LABEL).strip() for m in metas)
+    importers = _first_importer_by_key(metas, "nguon_thu_thap", UNKNOWN_SOURCE_FILE_LABEL)
+    return [
+        {"name": k, "chunk_count": v, "importer": importers.get(k, DEFAULT_IMPORTER)}
+        for k, v in sorted(counts.items())
+    ]
 
 
 def delete_scenario_source(name: str) -> int:
@@ -312,6 +388,7 @@ def delete_scenario_source(name: str) -> int:
 # import happens during this process's lifetime.
 refresh_citation_sources()
 backfill_import_source_tags()
+backfill_importer_tags()
 
 
 def similarity(a: str, b: str) -> float:
@@ -322,6 +399,111 @@ def tokenize(text: str):
     text = text.lower()
     text = re.sub(r'[^\w\s]', ' ', text)
     return [w for w in text.split() if len(w) > 1]
+
+
+# =========================
+# ENTITY-TYPE DETECTION
+# ─────────────────────────────
+# The old flow let "TNHH một thành viên" questions get answered from "TNHH
+# hai thành viên trở lên" documents (and vice versa) because they share most
+# of their vocabulary — nothing hard-filtered on business entity type before
+# reranking. This block detects the entity type implied by the question and
+# by each candidate document, so filter_compatible_docs() below can drop
+# documents belonging to a different entity type before they ever reach the
+# context or the reranker.
+#
+# Real indexed metadata (see import_law_engine.py / import_dataset_engine.py)
+# has no "entity_type" field — inference always falls back to scanning
+# page_content/topic/retrieval_keywords/title. A doc matching BOTH the
+# one-member and multi-member phrasing (a general provision that applies to
+# either) intentionally returns None rather than guessing — None means "not
+# entity-specific", so filter_compatible_docs() keeps it for any question.
+# =========================
+def normalize_text(value: str) -> str:
+    text = unicodedata.normalize("NFC", str(value or ""))
+    return " ".join(text.lower().split())
+
+
+_ENTITY_ONE_MEMBER_PHRASES = [
+    "tnhh một thành viên", "tnhh 1 thành viên",
+    "trách nhiệm hữu hạn một thành viên", "trách nhiệm hữu hạn 1 thành viên",
+]
+_ENTITY_MULTI_MEMBER_PHRASES = [
+    "tnhh hai thành viên", "tnhh 2 thành viên", "hai thành viên trở lên",
+    "trách nhiệm hữu hạn hai thành viên",
+]
+_ENTITY_PARTNERSHIP_PHRASES = ["công ty hợp danh", "thành viên hợp danh"]
+_ENTITY_JSC_PHRASES = ["công ty cổ phần", "cổ đông", "cổ phần"]
+_ENTITY_PRIVATE_PHRASES = ["doanh nghiệp tư nhân", "chủ doanh nghiệp tư nhân"]
+
+
+def _detect_entity_type(text: str) -> str | None:
+    t = normalize_text(text)
+    has_one = any(p in t for p in _ENTITY_ONE_MEMBER_PHRASES)
+    has_multi = any(p in t for p in _ENTITY_MULTI_MEMBER_PHRASES)
+    if has_one and not has_multi:
+        return "llc_one_member"
+    if has_multi and not has_one:
+        return "llc_multi_member"
+    if any(p in t for p in _ENTITY_PARTNERSHIP_PHRASES):
+        return "partnership"
+    if any(p in t for p in _ENTITY_JSC_PHRASES):
+        return "joint_stock_company"
+    if any(p in t for p in _ENTITY_PRIVATE_PHRASES):
+        return "private_enterprise"
+    return None
+
+
+_INTENT_PROCEDURE_PHRASES = ["thủ tục", "hồ sơ", "đăng ký thành lập", "cách thành lập", "trình tự", "nộp hồ sơ"]
+_INTENT_DEFINITION_PHRASES = ["là gì", "khái niệm", "định nghĩa"]
+_INTENT_SCENARIO_PHRASES = ["anh a", "chị b", "ông c", "bà d", "tình huống", "có được không", "đúng hay sai"]
+
+
+def detect_query_constraints(question: str) -> dict:
+    q = normalize_text(question)
+    intent = "general"
+    if any(p in q for p in _INTENT_PROCEDURE_PHRASES):
+        intent = "procedure"
+    elif any(p in q for p in _INTENT_DEFINITION_PHRASES):
+        intent = "definition"
+    elif any(p in q for p in _INTENT_SCENARIO_PHRASES):
+        intent = "scenario"
+    return {"entity_type": _detect_entity_type(q), "intent": intent}
+
+
+def infer_doc_entity(doc) -> str | None:
+    """Entity type of a retrieved Document. Checks an explicit entity_type/
+    doc_type metadata field first (forward-compatible with future imports
+    that tag it), then falls back to text inference — no currently indexed
+    chunk actually carries that field yet."""
+    metadata = doc.metadata or {}
+    explicit = _detect_entity_type(metadata.get("entity_type") or metadata.get("doc_type") or "")
+    if explicit:
+        return explicit
+    text = " ".join([
+        str(doc.page_content or ""),
+        str(metadata.get("topic") or ""),
+        str(metadata.get("retrieval_keywords") or ""),
+        str(metadata.get("title") or ""),
+    ])
+    return _detect_entity_type(text)
+
+
+def filter_compatible_docs(question: str, docs: list) -> list:
+    """Drop documents whose entity type conflicts with the one the question
+    asks about. Docs with no detectable entity type (general provisions) are
+    always kept — see module docstring above for why that's intentional."""
+    expected_entity = detect_query_constraints(question)["entity_type"]
+    if not expected_entity:
+        return docs
+
+    compatible = []
+    for doc in docs:
+        doc_entity = infer_doc_entity(doc)
+        if doc_entity and doc_entity != expected_entity:
+            continue
+        compatible.append(doc)
+    return compatible
 
 
 # =========================
@@ -502,12 +684,16 @@ def retrieve_docs(question: str, rewritten_q: str):
                 return kw_hits[:5]
 
         # ===== HYBRID: keyword-phrase recall + semantic search =====
-        # For longer, naturally-phrased questions, bge-small-en-v1.5 (English-
-        # tuned) routinely misses the right article even when its
-        # retrieval_keywords field is an near-exact match for the question —
-        # e.g. "B 16 tuổi có được đăng ký hộ kinh doanh không?" never surfaced
-        # the Điều 20/21 BLDS 2015 doc (keywords: "chưa đủ 18 tuổi", "hộ kinh
-        # doanh"...) in the semantic top-5. Score every doc by keyword-token
+        # For longer, naturally-phrased questions, semantic search alone can
+        # still miss the right article even when its retrieval_keywords field
+        # is a near-exact match for the question (originally observed with
+        # bge-small-en-v1.5, an English-tuned model — kept as a safety net
+        # after switching to the multilingual bge-m3, since keyword-token
+        # overlap is a cheap independent signal regardless of embedding
+        # quality) — e.g. "B 16 tuổi có được đăng ký hộ kinh doanh không?"
+        # never surfaced the Điều 20/21 BLDS 2015 doc (keywords: "chưa đủ 18
+        # tuổi", "hộ kinh doanh"...) in the semantic top-5. Score every doc by
+        # keyword-token
         # overlap independent of embedding similarity, and merge those hits
         # ahead of the semantic results so select_best_doc() actually gets a
         # chance to consider them.
@@ -535,9 +721,15 @@ def retrieve_docs(question: str, rewritten_q: str):
 # Scores against page_content + retrieval_keywords (weighted x2)
 # + prefers KB_Articles docs over Q&A docs
 # =========================
+_OFFICIAL_SOURCE_MARKERS = [
+    "cổng thông tin", "chính phủ", "công báo", "vbpl.vn", "chinhphu.vn", "văn bản hợp nhất",
+]
+
+
 def select_best_doc(question: str, docs):
     q_words = [w for w in tokenize(question) if w not in STOPWORDS]
     q_counter = Counter(q_words)
+    intent = detect_query_constraints(question)["intent"]
 
     best_doc = None
     best_score = -1
@@ -577,8 +769,30 @@ def select_best_doc(question: str, docs):
                 score += 5
 
         # prioritize KB articles
-        if "KB_Articles" in metadata.get("nguon_thu_thap", ""):
+        nguon = metadata.get("nguon_thu_thap", "")
+        if "KB_Articles" in nguon:
             score += 2
+
+        # Source-tier priority: official law text > standardized KB > raw Q&A
+        # dataset. Markers/thresholds taken from what's actually indexed
+        # today (see engine.rag_engine module — law chunks are tagged
+        # nguon_thu_thap="Cổng thông tin chính phủ").
+        nguon_lower = nguon.lower()
+        if any(marker in nguon_lower for marker in _OFFICIAL_SOURCE_MARKERS):
+            score += 20
+        if "kb_articles_updated" in nguon_lower:
+            score += 10
+        if "dataset_200" in nguon_lower:
+            score -= 3
+
+        # Scenario/case-study docs are only appropriate for scenario-style
+        # questions ("Anh A... có được không?") — for a general/procedure/
+        # definition question, a scenario doc answering a *different*
+        # specific fact pattern shouldn't outrank the general-purpose law text.
+        is_scenario_doc = metadata.get("doc_type") == "scenario_qa" or \
+            (metadata.get("question_type") or "").lower() == "scenario_case"
+        if is_scenario_doc:
+            score += 8 if intent == "scenario" else -15
 
         if score > best_score:
             best_score = score
@@ -648,6 +862,10 @@ def build_prompt(context: str, question: str, q_type: str,
 - Nếu tài liệu có metadata căn cứ pháp lý, phải sử dụng đúng điều luật đó.
 - CHỈ được trích số Điều xuất hiện NGUYÊN VĂN trong phần "Tài liệu" bên dưới. Nếu không thấy số Điều liên quan trong tài liệu, hãy nói rõ là tài liệu không đề cập, KHÔNG được đoán hay lấy từ kiến thức chung.
 - KHÔNG được tự đặt tên nguồn, mã văn bản, tên tác giả/giảng viên hay bất kỳ trích dẫn nào — phần nguồn tài liệu do hệ thống tự thêm vào sau, bạn không viết phần đó.
+- KHÔNG tự thêm tình tiết, số liệu hay điều kiện không có trong câu hỏi của người dùng.
+- KHÔNG chuyển đổi loại hình doanh nghiệp nêu trong câu hỏi (vd: từ "một thành viên" sang "hai thành viên trở lên", hoặc ngược lại) khi trả lời.
+- KHÔNG dùng nội dung của một tình huống/case cụ thể để trả lời một câu hỏi mang tính khái quát, trừ khi người dùng thực sự hỏi về tình huống đó.
+- Nếu Tài liệu bên dưới KHÔNG đủ để trả lời đúng câu hỏi, phải trả lời: "Không đủ dữ liệu để kết luận." thay vì suy diễn.
 {article_hint}
 Tài liệu:
 {context}
@@ -885,8 +1103,20 @@ def ask_rag(question: str, return_debug: bool = False):
         if not docs:
             return "⚠️ Không tìm thấy thông tin đủ liên quan trong cơ sở dữ liệu. Vui lòng hỏi rõ hơn hoặc kiểm tra câu hỏi có thuộc phạm vi Luật Doanh nghiệp không."
 
-        # STEP 3: rerank
-        best_doc = select_best_doc(better_q, docs)
+        # STEP 2.1: drop documents whose business-entity type conflicts with
+        # the question (e.g. "TNHH một thành viên" question vs "TNHH hai
+        # thành viên trở lên" document) — see filter_compatible_docs above.
+        docs = filter_compatible_docs(question, docs)
+        if not docs:
+            return (
+                "⚠️ Hệ thống chưa tìm thấy nguồn phù hợp đúng loại hình doanh nghiệp "
+                "và đúng nội dung câu hỏi. Vui lòng cung cấp câu hỏi chi tiết hơn."
+            )
+
+        # STEP 3: rerank — use the ORIGINAL question, not the LLM-rewritten
+        # one: rewrite_query() can drop the exact qualifier ("một thành viên"
+        # vs "hai thành viên") that distinguishes otherwise near-identical docs.
+        best_doc = select_best_doc(question, docs)
         if not best_doc:
             return "❌ Không đủ dữ liệu để trả lời câu hỏi này."
 
@@ -912,6 +1142,16 @@ def ask_rag(question: str, return_debug: bool = False):
 
         # STEP 8: clean
         answer = clean_answer(answer)
+
+        # STEP 8.1: reject the whole answer if it cites an article number
+        # that never appeared in the retrieved context — see
+        # validate_answer_citations() docstring above.
+        if not validate_answer_citations(answer, context):
+            return (
+                "⚠️ Hệ thống phát hiện căn cứ pháp lý trong câu trả lời không khớp "
+                "với tài liệu truy xuất nên chưa thể trả lời chắc chắn. "
+                "Vui lòng đặt lại câu hỏi cụ thể hơn."
+            )
 
         # STEP 9: citation (pass answer + extra_docs for secondary sources)
         final_answer = answer + build_citation(best_doc.metadata, answer, extra_docs, context)

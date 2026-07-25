@@ -153,8 +153,8 @@ def main():
         for a in ARTICLES
     ]
 
-    print("Loading embedding model (BAAI/bge-small-en-v1.5)...")
-    embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+    print("Loading embedding model (BAAI/bge-m3)...")
+    embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
     vs = Chroma(persist_directory=DB_PATH, embedding_function=embedding)
 
     existing = vs.get(include=["metadatas"])
