@@ -390,11 +390,26 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
                 art_num = m.group(1)
                 meta["article_number"] = art_num
                 meta["article_reference"] = f"Điều {art_num}"
-                meta["title"] = lines[0][:120] if lines else f"Điều {art_num}"
+                title = lines[0][:120] if lines else f"Điều {art_num}"
             else:
                 # Fallback chunk with no detected header — do NOT fabricate an
                 # article number (segment index != real article number).
-                meta["title"] = lines[0][:120] if lines else f"Đoạn {i + 1}"
+                title = lines[0][:120] if lines else f"Đoạn {i + 1}"
+            meta["title"] = title
+
+            # retrieval_keywords: without this, raw law-text chunks score
+            # only on flat content keyword-overlap in select_best_doc(),
+            # while curated dataset chunks (KB_Articles_Updated etc.) carry
+            # a dense manually-written retrieval_keywords field worth 3x per
+            # word plus a +10 exact-phrase bonus — official law chunks lost
+            # that comparison every time despite being the higher-tier
+            # source (see nhận xét 25/7 finding). Derive a topic phrase from
+            # the article's own heading (stripping the "Điều N." prefix) so
+            # it gets the same scoring treatment.
+            topic_phrase = _re.sub(r'^Điều\s+\d+[a-z]?[.,]\s*', '', title).strip()
+            if topic_phrase:
+                meta["retrieval_keywords"] = topic_phrase
+
             docs.append(Document(page_content=seg, metadata=meta))
 
         # ── 6. Add to ChromaDB (no wipe, skip existing so_ky_hieu) ──

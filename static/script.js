@@ -53,7 +53,7 @@ function formatAssistantHTML(text) {
         const start = bodyText.indexOf(marker);
         if (start === -1) return null;
         const from = start + marker.length;
-        const siblings = ['Kết luận:', 'Phân tích:', 'Lưu ý:'];
+        const siblings = ['Kết luận:', 'Căn cứ pháp lý:', 'Phân tích:', 'Lưu ý:'];
         let end = bodyText.length;
         for (const m of siblings) {
             if (m === marker) continue;
@@ -63,14 +63,17 @@ function formatAssistantHTML(text) {
         return bodyText.substring(from, end).trim() || null;
     }
 
-    const conclusion = getSection('Kết luận');
-    const analysis   = getSection('Phân tích');
-    const note       = getSection('Lưu ý');
+    const conclusion  = getSection('Kết luận');
+    const legalBasis  = getSection('Căn cứ pháp lý');
+    const analysis    = getSection('Phân tích');
+    const note        = getSection('Lưu ý');
 
     let html = '';
     if (conclusion || analysis) {
         if (conclusion)
             html += `<div class="msg-section msg-conclusion"><span class="section-label">Kết luận</span>${conclusion.replace(/\n/g, '<br>')}</div>`;
+        if (legalBasis)
+            html += `<div class="msg-section msg-legal-basis"><span class="section-label">Căn cứ pháp lý</span>${legalBasis.replace(/\n/g, '<br>')}</div>`;
         if (analysis)
             html += `<div class="msg-section msg-analysis"><span class="section-label">Phân tích</span>${analysis.replace(/\n/g, '<br>')}</div>`;
         if (note)

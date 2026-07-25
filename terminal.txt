@@ -48,6 +48,13 @@ python database/build_db_doc.py "ten_file.pdf" --so-ky-hieu "XX/YYYY" --loai "Lu
 // tới 310 bản ghi Q&A/KB_Articles khác trong DB
 python database/rebuild_law_from_docx.py
 
+// Thêm/re-run các điều luật tham khảo rời (Điều 20, 21 Bộ luật Dân sự 91/2015/QH13,
+// Điều 80 Nghị định 01/2021/NĐ-CP — điều kiện tuổi/năng lực hành vi dân sự khi
+// thành lập doanh nghiệp/hộ kinh doanh). Nội dung khai báo sẵn trong ARTICLES ở
+// đầu file, dedupe theo (so_ky_hieu, article_number) nên chạy lại nhiều lần an toàn.
+// Thêm điều mới: sửa file này rồi chạy lại lệnh dưới, không tạo script one-off khác.
+python -m database.reference_source
+
 // chạy chương trình
 python app.py
 

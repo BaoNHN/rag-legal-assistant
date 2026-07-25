@@ -37,6 +37,7 @@ PROCEDURE_PATTERNS = [
     "các bước",
     "hồ sơ",
     "nộp ở đâu",
+    "thành lập",
 ]
 
 CONDITION_PATTERNS = [
@@ -112,11 +113,12 @@ def clean_answer(text: str) -> str:
 def validate_answer_citations(answer: str, context: str) -> bool:
     """Last-resort gate before an answer is shown to the user: every "Điều N"
     the model wrote in its own prose must actually appear in the retrieved
-    context. build_citation() already excludes ungrounded article numbers
-    from the citation *footer* it appends — this catches the case that
-    slips past that: a wrong/invented article number left sitting in the
-    answer BODY text, which build_citation() never touches, still reading as
-    trustworthy to the user even with no citation attached to it."""
+    context. build_citation() never derives the citation *footer* from the
+    answer text at all (it's built strictly from best_doc/extra_docs
+    metadata) — this catches a different failure: a wrong/invented article
+    number left sitting in the answer BODY text, which build_citation()
+    never touches, still reading as trustworthy to the user even with no
+    citation attached to it."""
     answer_articles = set(re.findall(r'Điều\s+(\d+[a-z]?)', answer or "", flags=re.IGNORECASE))
     if not answer_articles:
         return True
@@ -424,6 +426,28 @@ def normalize_text(value: str) -> str:
     return " ".join(text.lower().split())
 
 
+_TONE_MARKS = "̣̀́̃̉"  # huyền, sắc, ngã, hỏi, nặng
+
+
+def _strip_tone(text: str) -> str:
+    """Drop Vietnamese tone marks (sắc/huyền/hỏi/ngã/nặng) while keeping the
+    base vowel distinct (ă/â/ê/ô/ơ/ư/đ untouched) — makes the hardcoded
+    intent/entity-type phrase lists below tolerant of a missing/wrong tone
+    mark (e.g. "lâp" vs "lập"), a common typo that otherwise silently drops
+    a question out of its intended bucket with no error: "thành lâp..." failed
+    to match "thành lập" in _INTENT_PROCEDURE_PHRASES, intent fell back to
+    "general", the procedure-intent retrieval boost in _score_doc() never
+    fired, and an unrelated article (Điều 203, "chuyển đổi... thành công ty
+    TNHH một thành viên") won on raw keyword overlap instead of Điều 21/74."""
+    decomposed = unicodedata.normalize("NFD", text)
+    return unicodedata.normalize("NFC", "".join(c for c in decomposed if c not in _TONE_MARKS))
+
+
+def _phrase_in(phrase: str, text: str) -> bool:
+    """Tone-mark-typo-tolerant substring check, for the phrase lists below."""
+    return _strip_tone(phrase) in _strip_tone(text)
+
+
 _ENTITY_ONE_MEMBER_PHRASES = [
     "tnhh một thành viên", "tnhh 1 thành viên",
     "trách nhiệm hữu hạn một thành viên", "trách nhiệm hữu hạn 1 thành viên",
@@ -439,22 +463,25 @@ _ENTITY_PRIVATE_PHRASES = ["doanh nghiệp tư nhân", "chủ doanh nghiệp tư
 
 def _detect_entity_type(text: str) -> str | None:
     t = normalize_text(text)
-    has_one = any(p in t for p in _ENTITY_ONE_MEMBER_PHRASES)
-    has_multi = any(p in t for p in _ENTITY_MULTI_MEMBER_PHRASES)
+    has_one = any(_phrase_in(p, t) for p in _ENTITY_ONE_MEMBER_PHRASES)
+    has_multi = any(_phrase_in(p, t) for p in _ENTITY_MULTI_MEMBER_PHRASES)
     if has_one and not has_multi:
         return "llc_one_member"
     if has_multi and not has_one:
         return "llc_multi_member"
-    if any(p in t for p in _ENTITY_PARTNERSHIP_PHRASES):
+    if any(_phrase_in(p, t) for p in _ENTITY_PARTNERSHIP_PHRASES):
         return "partnership"
-    if any(p in t for p in _ENTITY_JSC_PHRASES):
+    if any(_phrase_in(p, t) for p in _ENTITY_JSC_PHRASES):
         return "joint_stock_company"
-    if any(p in t for p in _ENTITY_PRIVATE_PHRASES):
+    if any(_phrase_in(p, t) for p in _ENTITY_PRIVATE_PHRASES):
         return "private_enterprise"
     return None
 
 
-_INTENT_PROCEDURE_PHRASES = ["thủ tục", "hồ sơ", "đăng ký thành lập", "cách thành lập", "trình tự", "nộp hồ sơ"]
+_INTENT_PROCEDURE_PHRASES = [
+    "thủ tục", "hồ sơ", "đăng ký thành lập", "cách thành lập", "trình tự",
+    "nộp hồ sơ", "thành lập",
+]
 _INTENT_DEFINITION_PHRASES = ["là gì", "khái niệm", "định nghĩa"]
 _INTENT_SCENARIO_PHRASES = ["anh a", "chị b", "ông c", "bà d", "tình huống", "có được không", "đúng hay sai"]
 
@@ -462,11 +489,11 @@ _INTENT_SCENARIO_PHRASES = ["anh a", "chị b", "ông c", "bà d", "tình huốn
 def detect_query_constraints(question: str) -> dict:
     q = normalize_text(question)
     intent = "general"
-    if any(p in q for p in _INTENT_PROCEDURE_PHRASES):
+    if any(_phrase_in(p, q) for p in _INTENT_PROCEDURE_PHRASES):
         intent = "procedure"
-    elif any(p in q for p in _INTENT_DEFINITION_PHRASES):
+    elif any(_phrase_in(p, q) for p in _INTENT_DEFINITION_PHRASES):
         intent = "definition"
-    elif any(p in q for p in _INTENT_SCENARIO_PHRASES):
+    elif any(_phrase_in(p, q) for p in _INTENT_SCENARIO_PHRASES):
         intent = "scenario"
     return {"entity_type": _detect_entity_type(q), "intent": intent}
 
@@ -709,6 +736,25 @@ def retrieve_docs(question: str, rewritten_q: str):
                 merged.append(d)
                 seen.add(d.page_content)
 
+        # ===== PROCEDURE-INTENT AUGMENTATION =====
+        # "Thành lập công ty X như thế nào?" shares almost all of its
+        # vocabulary ("công ty", "tnhh", "thành viên"...) with ownership/
+        # definition articles, so those articles' keyword-overlap score
+        # crowds out the actual hồ sơ/trình tự/cấp-GCN articles (doc_type
+        # registration_llc / registration_procedure / erc_issuance etc.)
+        # from ever reaching the top-5 kw/semantic candidates above. Pull
+        # every establishment-shaped doc_type in directly so
+        # select_best_doc()'s procedure-intent boost (see _score_doc) has
+        # something to actually rank. filter_compatible_docs() downstream
+        # still drops entity-type mismatches (e.g. registration_jsc docs
+        # for a TNHH one-member question).
+        if detect_query_constraints(question)["intent"] == "procedure":
+            for d in all_docs:
+                doc_type = d.metadata.get("doc_type", "")
+                if doc_type in _ESTABLISHMENT_DOC_TYPES and d.page_content not in seen:
+                    merged.append(d)
+                    seen.add(d.page_content)
+
         return merged
 
     except Exception:
@@ -726,6 +772,79 @@ _OFFICIAL_SOURCE_MARKERS = [
 ]
 
 
+def _score_doc(question: str, d, q_counter: Counter, intent: str) -> int:
+    score = 0
+
+    content = d.page_content.lower()
+    metadata = d.metadata
+
+    # keyword overlap
+    for w, cnt in q_counter.items():
+        if w in content:
+            score += cnt
+
+    # metadata keywords — single word match
+    kw_field = metadata.get("retrieval_keywords", "")
+    kw_text = kw_field.lower().replace(";", " ")
+
+    for w, cnt in q_counter.items():
+        if w in kw_text:
+            score += cnt * 3
+
+    # Multi-word keyword phrase match (high precision boost)
+    # Matches "công ty hợp danh", "thành viên hợp danh" etc.
+    q_lower = question.lower()
+    for kw_phrase in kw_field.lower().split(";"):
+        kw_phrase = kw_phrase.strip()
+        if len(kw_phrase) > 8 and kw_phrase in q_lower:
+            score += 10  # strong boost for exact phrase match
+
+    # article reference bonus
+    article_ref = metadata.get("article_reference", "")
+    if article_ref:
+        art_num = re.findall(r'\d+', article_ref)
+        if art_num and art_num[0] in question:
+            score += 5
+
+    # prioritize KB articles
+    nguon = metadata.get("nguon_thu_thap", "")
+    if "KB_Articles" in nguon:
+        score += 2
+
+    # Source-tier priority: official law text > standardized KB > raw Q&A
+    # dataset. Markers/thresholds taken from what's actually indexed
+    # today (see engine.rag_engine module — law chunks are tagged
+    # nguon_thu_thap="Cổng thông tin chính phủ").
+    nguon_lower = nguon.lower()
+    if any(marker in nguon_lower for marker in _OFFICIAL_SOURCE_MARKERS):
+        score += 20
+    if "kb_articles_updated" in nguon_lower:
+        score += 10
+    if "dataset_200" in nguon_lower:
+        score -= 3
+
+    # Scenario/case-study docs are only appropriate for scenario-style
+    # questions ("Anh A... có được không?") — for a general/procedure/
+    # definition question, a scenario doc answering a *different*
+    # specific fact pattern shouldn't outrank the general-purpose law text.
+    is_scenario_doc = metadata.get("doc_type") == "scenario_qa" or \
+        (metadata.get("question_type") or "").lower() == "scenario_case"
+    if is_scenario_doc:
+        score += 8 if intent == "scenario" else -15
+
+    # "Thành lập công ty X như thế nào?" questions need the establishment
+    # articles (hồ sơ, trình tự đăng ký, cấp GCN — see
+    # _ESTABLISHMENT_DOC_TYPES below) — but those articles' retrieval_keywords
+    # barely overlap with the generic "công ty/tnhh/thành viên" vocabulary
+    # shared by dozens of ownership/definition articles. A small boost isn't
+    # enough to close that gap, so this has to be large enough to reliably
+    # land them in the top context slots.
+    if intent == "procedure" and metadata.get("doc_type", "") in _ESTABLISHMENT_DOC_TYPES:
+        score += 25
+
+    return score
+
+
 def select_best_doc(question: str, docs):
     q_words = [w for w in tokenize(question) if w not in STOPWORDS]
     q_counter = Counter(q_words)
@@ -735,65 +854,7 @@ def select_best_doc(question: str, docs):
     best_score = -1
 
     for d in docs:
-        score = 0
-
-        content = d.page_content.lower()
-        metadata = d.metadata
-
-        # keyword overlap
-        for w, cnt in q_counter.items():
-            if w in content:
-                score += cnt
-
-        # metadata keywords — single word match
-        kw_field = metadata.get("retrieval_keywords", "")
-        kw_text = kw_field.lower().replace(";", " ")
-
-        for w, cnt in q_counter.items():
-            if w in kw_text:
-                score += cnt * 3
-
-        # Multi-word keyword phrase match (high precision boost)
-        # Matches "công ty hợp danh", "thành viên hợp danh" etc.
-        q_lower = question.lower()
-        for kw_phrase in kw_field.lower().split(";"):
-            kw_phrase = kw_phrase.strip()
-            if len(kw_phrase) > 8 and kw_phrase in q_lower:
-                score += 10  # strong boost for exact phrase match
-
-        # article reference bonus
-        article_ref = metadata.get("article_reference", "")
-        if article_ref:
-            art_num = re.findall(r'\d+', article_ref)
-            if art_num and art_num[0] in question:
-                score += 5
-
-        # prioritize KB articles
-        nguon = metadata.get("nguon_thu_thap", "")
-        if "KB_Articles" in nguon:
-            score += 2
-
-        # Source-tier priority: official law text > standardized KB > raw Q&A
-        # dataset. Markers/thresholds taken from what's actually indexed
-        # today (see engine.rag_engine module — law chunks are tagged
-        # nguon_thu_thap="Cổng thông tin chính phủ").
-        nguon_lower = nguon.lower()
-        if any(marker in nguon_lower for marker in _OFFICIAL_SOURCE_MARKERS):
-            score += 20
-        if "kb_articles_updated" in nguon_lower:
-            score += 10
-        if "dataset_200" in nguon_lower:
-            score -= 3
-
-        # Scenario/case-study docs are only appropriate for scenario-style
-        # questions ("Anh A... có được không?") — for a general/procedure/
-        # definition question, a scenario doc answering a *different*
-        # specific fact pattern shouldn't outrank the general-purpose law text.
-        is_scenario_doc = metadata.get("doc_type") == "scenario_qa" or \
-            (metadata.get("question_type") or "").lower() == "scenario_case"
-        if is_scenario_doc:
-            score += 8 if intent == "scenario" else -15
-
+        score = _score_doc(question, d, q_counter, intent)
         if score > best_score:
             best_score = score
             best_doc = d
@@ -824,17 +885,30 @@ _DOC_TYPE_MAP = {
     "dependent_units": "definition",
 }
 
+# Doc types specifically about STARTING a business — hồ sơ, trình tự đăng
+# ký, cơ quan tiếp nhận, kết quả (GCN). Narrower than _DOC_TYPE_MAP's
+# "procedure"/"condition" buckets above, which also catch doc types that
+# have nothing to do with establishment (publication, name_prohibitions,
+# asset_valuation, change_registration...) and would otherwise crowd a
+# "thành lập X" question's context with irrelevant ongoing-compliance
+# articles instead of the ones the question is actually asking for.
+_ESTABLISHMENT_DOC_TYPES = {
+    "registration_llc", "registration_partnership", "registration_jsc",
+    "registration_private_enterprise", "registration_procedure",
+    "erc_issuance", "erc_contents", "establishment_eligibility",
+}
+
 
 def classify_question(question: str, best_doc=None) -> str:
     q = question.lower()
 
-    if any(p in q for p in PROCEDURE_PATTERNS):
+    if any(_phrase_in(p, q) for p in PROCEDURE_PATTERNS):
         return "procedure"
 
-    if any(p in q for p in CONDITION_PATTERNS):
+    if any(_phrase_in(p, q) for p in CONDITION_PATTERNS):
         return "condition"
 
-    if any(p in q for p in DEFINITION_PATTERNS):
+    if any(_phrase_in(p, q) for p in DEFINITION_PATTERNS):
         return "definition"
 
     return "general"
@@ -861,7 +935,7 @@ def build_prompt(context: str, question: str, q_type: str,
 - CĂN CỨ PHÁP LÝ phải lấy ĐÚNG từ tài liệu được cung cấp. KHÔNG tự suy diễn hay thay đổi số điều luật.
 - Nếu tài liệu có metadata căn cứ pháp lý, phải sử dụng đúng điều luật đó.
 - CHỈ được trích số Điều xuất hiện NGUYÊN VĂN trong phần "Tài liệu" bên dưới. Nếu không thấy số Điều liên quan trong tài liệu, hãy nói rõ là tài liệu không đề cập, KHÔNG được đoán hay lấy từ kiến thức chung.
-- KHÔNG được tự đặt tên nguồn, mã văn bản, tên tác giả/giảng viên hay bất kỳ trích dẫn nào — phần nguồn tài liệu do hệ thống tự thêm vào sau, bạn không viết phần đó.
+- KHÔNG được tự đặt tên nguồn, mã văn bản, tên tác giả/giảng viên hay bất kỳ trích dẫn nào — phần nguồn tài liệu và phần "Căn cứ pháp lý" do hệ thống tự thêm vào sau, bạn không viết 2 phần đó.
 - KHÔNG tự thêm tình tiết, số liệu hay điều kiện không có trong câu hỏi của người dùng.
 - KHÔNG chuyển đổi loại hình doanh nghiệp nêu trong câu hỏi (vd: từ "một thành viên" sang "hai thành viên trở lên", hoặc ngược lại) khi trả lời.
 - KHÔNG dùng nội dung của một tình huống/case cụ thể để trả lời một câu hỏi mang tính khái quát, trừ khi người dùng thực sự hỏi về tình huống đó.
@@ -877,11 +951,18 @@ Câu hỏi: {question}
         "\n\nTrả lời theo đúng cấu trúc sau (bắt buộc, mỗi mục một dòng riêng):\n"
         "**Kết luận:** [1 câu trả thẳng câu hỏi]\n"
         "**Phân tích:** [2-3 câu giải thích ngắn]\n"
-        "**Lưu ý:** [1 điểm đặc biệt cần nhớ, bỏ dòng này nếu không có]\n"
-        "Tổng cộng tối đa 200 từ. Không viết gì ngoài 3 mục trên."
+        "**Lưu ý:** [1 điểm MỚI, KHÔNG lặp lại bất kỳ ý nào đã nêu ở Kết luận/Phân tích — "
+        "ví dụ: so sánh với loại hình doanh nghiệp khác, trường hợp ngoại lệ, hoặc điểm dễ nhầm lẫn. "
+        "Bỏ hẳn dòng này nếu không có điểm mới nào để thêm]\n"
+        "Tổng cộng tối đa 200 từ. Không viết gì ngoài các mục trên."
     )
     if q_type == "procedure":
-        base += "Trong **Phân tích**, liệt kê các bước theo thứ tự (1, 2, 3...)." + STRUCT
+        base += (
+            "Trong **Phân tích**, liệt kê các bước theo thứ tự (1, 2, 3...). "
+            "Nếu câu hỏi về THÀNH LẬP doanh nghiệp và tài liệu có đề cập, "
+            "cố gắng bao quát: điều kiện thành lập, hồ sơ cần nộp, trình tự/cơ quan tiếp nhận, "
+            "và kết quả (Giấy chứng nhận đăng ký doanh nghiệp)."
+        ) + STRUCT
     elif q_type == "condition":
         base += "Trong **Phân tích**, liệt kê ngắn gọn từng điều kiện." + STRUCT
     elif q_type == "definition":
@@ -894,8 +975,107 @@ Câu hỏi: {question}
 # =========================
 # BUILD CITATION
 # =========================
-def build_citation(meta: dict, answer: str = "", secondary_docs=None, context: str = "") -> str:
+# Canonical URL for the consolidated Enterprise Law text — used whenever a
+# document is relabeled to "VBHN 67/VBHN-VPQH" below (see build_citation).
+# Some indexed chunks carry so_ky_hieu="59/2020/QH14" with a source_url that
+# points at the *original* law's lược đồ page instead of the VBHN 67 text,
+# which — if printed as-is under the "VBHN 67" label — shows a URL that
+# doesn't match the document name displayed to the user.
+_VBHN_67_URL = "https://congbao.chinhphu.vn/van-ban/van-ban-hop-nhat-so-67-vbhn-vpqh-45865.htm"
+
+
+def _detect_khoan(content: str, answer: str) -> str | None:
+    """A law chunk is indexed as a whole Điều, but the answer usually only
+    draws on one khoản inside it (nhận xét 25/7 flagged citing bare "Điều 74"
+    when the answer only used khoản 1's definition sentence). Split the
+    chunk into its numbered khoản and, only when the answer's wording
+    overlaps one of them more than any other, name that khoản instead of
+    the whole article — ambiguous cases fall back to citing the article as
+    a whole rather than guessing."""
+    khoan_matches = list(re.finditer(r'(?:^|\n)(\d+)\.\s+(.+?)(?=\n\d+\.\s|\Z)', content, re.DOTALL))
+    if len(khoan_matches) < 2:
+        return None
+    answer_words = {w for w in tokenize(answer) if w not in STOPWORDS}
+    if not answer_words:
+        return None
+    best_n, best_score, second_score = None, -1, -1
+    for m in khoan_matches:
+        words = {w for w in tokenize(m.group(2)) if w not in STOPWORDS}
+        score = len(answer_words & words)
+        if score > best_score:
+            best_n, second_score, best_score = m.group(1), best_score, score
+        elif score > second_score:
+            second_score = score
+    if best_n is not None and best_score > 0 and best_score > second_score:
+        return best_n
+    return None
+
+
+def _resolve_primary_article_ref(meta: dict, content: str = "", answer: str = "") -> str:
+    """Primary article reference, upgraded to "Khoản N Điều X" when the
+    answer clearly drew from just one khoản inside the article (see
+    _detect_khoan). Shared by build_citation() and build_legal_basis_line()
+    so Nguồn chính and Căn cứ pháp lý can never disagree with each other —
+    both are derived from best_doc's own metadata, never from LLM output.
+    Mixing in article numbers the LLM happened to write let a number it
+    recalled (or invented) get credited to a source document that never
+    mentioned it, and in whatever order the answer happened to mention it
+    (e.g. "Điều 76; Điều 74" when the actual primary basis was Điều 74)."""
     article_ref = meta.get("article_reference", "")
+    if content and answer and article_ref and ";" not in article_ref \
+            and not article_ref.lower().startswith("khoản"):
+        khoan_n = _detect_khoan(content, answer)
+        if khoan_n:
+            article_ref = f"Khoản {khoan_n} {article_ref}"
+    return article_ref
+
+
+def build_legal_basis_line(meta: dict, secondary_docs=None, content: str = "", answer: str = "") -> str:
+    """Builds the answer body's "Căn cứ pháp lý" line entirely from
+    best_doc/extra_docs metadata — replaces an earlier version where the LLM
+    was asked to write this line itself from a prompt hint, which in
+    practice could drift from Nguồn chính (LLM wrote "Điều 74" while Nguồn
+    chính correctly said "Điều 21" — nhận xét 25/7 follow-up). Lists the same
+    articles as Nguồn chính + Nguồn tham khảo combined, since a "thành lập X"
+    question usually genuinely needs several articles together (hồ sơ +
+    trình tự + định nghĩa), not just one."""
+    so_ky_hieu = meta.get("so_ky_hieu", "")
+    if so_ky_hieu and not is_known_citation_source(so_ky_hieu):
+        so_ky_hieu = ""
+
+    primary_ref = _resolve_primary_article_ref(meta, content, answer)
+    if not primary_ref:
+        return ""
+
+    refs = [primary_ref]
+    seen = {meta.get("article_reference", "")}
+    same_law_only = True
+
+    for doc in (secondary_docs or [])[:3]:
+        m = doc.metadata
+        s_article = m.get("article_reference", "")
+        s_ky_hieu = m.get("so_ky_hieu", "")
+        if not s_article or s_article in seen:
+            continue
+        if s_ky_hieu and not is_known_citation_source(s_ky_hieu):
+            continue
+        seen.add(s_article)
+        refs.append(s_article)
+        if s_ky_hieu and s_ky_hieu != meta.get("so_ky_hieu", ""):
+            same_law_only = False
+
+    line = ", ".join(refs)
+    if same_law_only:
+        law_name = f"{meta.get('loai_van_ban', '')} {so_ky_hieu}".strip()
+        if "67/VBHN" in so_ky_hieu or "59/2020" in so_ky_hieu:
+            law_name = "Văn bản hợp nhất Luật Doanh nghiệp số 67/VBHN-VPQH năm 2025"
+        if law_name:
+            line += f" — {law_name}"
+    return line
+
+
+def build_citation(meta: dict, secondary_docs=None, content: str = "", answer: str = "") -> str:
+    article_ref = _resolve_primary_article_ref(meta, content, answer)
     topic = meta.get("topic", "")
     so_ky_hieu = meta.get("so_ky_hieu", "")
     loai = meta.get("loai_van_ban", "")
@@ -906,41 +1086,6 @@ def build_citation(meta: dict, answer: str = "", secondary_docs=None, context: s
     if so_ky_hieu and not is_known_citation_source(so_ky_hieu):
         so_ky_hieu = ""
         source_url = ""
-
-    # Include any additional articles cited in the answer — but only ones that
-    # actually appear in the retrieved context. Otherwise a number the model
-    # recalled from general knowledge (or hallucinated) gets credited to a
-    # source document that never mentioned it.
-    #
-    # If a cited number is known (via secondary_docs) to belong to a DIFFERENT
-    # law than this primary document, don't lump it into this line's law_name
-    # grouping — that mislabels it as if it came from the primary document's
-    # law (e.g. "Điều 80; Điều 21 — Nghị định 01/2021/NĐ-CP" when Điều 21 is
-    # actually from Bộ luật Dân sự 91/2015/QH13). It's still shown correctly,
-    # under its own so_ky_hieu, in the "Nguồn tham khảo" section below.
-    other_law_refs = {
-        d.metadata.get("article_reference", "")
-        for d in (secondary_docs or [])
-        if d.metadata.get("so_ky_hieu", "") and d.metadata.get("so_ky_hieu", "") != so_ky_hieu
-    }
-
-    if answer:
-        cited_nums = re.findall(r'Điều\s+(\d+)', answer)
-        meta_num = re.sub(r'[^\d]', '', article_ref)
-        seen = {article_ref}
-        extra = []
-        for n in cited_nums:
-            ref = f"Điều {n}"
-            if n == meta_num or ref in seen:
-                continue
-            if ref in other_law_refs:
-                continue
-            if context and ref not in context:
-                continue
-            extra.append(ref)
-            seen.add(ref)
-        if extra:
-            article_ref = f"{article_ref}; " + "; ".join(extra) if article_ref else "; ".join(extra)
 
     parts = []
     if article_ref:
@@ -954,12 +1099,16 @@ def build_citation(meta: dict, answer: str = "", secondary_docs=None, context: s
     if ("67/VBHN" in so_ky_hieu or "59/2020" in so_ky_hieu or
             "67/VBHN" in law_name or "59/2020" in law_name):
         law_name = "Văn bản hợp nhất Luật Doanh nghiệp số 67/VBHN-VPQH năm 2025"
+        # Relabeled to the VBHN 67 text — the URL must point there too,
+        # not at whichever page this specific chunk's metadata happened to
+        # carry (see _VBHN_67_URL docstring above).
+        source_url = _VBHN_67_URL
     if law_name:
         parts.append(law_name)
 
     citation = " — ".join(parts) if parts else meta.get("nguon_thu_thap", "")
     result = f"\n\n📖 Nguồn chính: {citation}"
-    if source_url and "vbpl.vn" in source_url:
+    if source_url and ("vbpl.vn" in source_url or "congbao.chinhphu.vn" in source_url):
         result += f"\n🔗 {source_url}"
 
     # Secondary sources (max 3, deduplicated, short format)
@@ -1120,13 +1269,34 @@ def ask_rag(question: str, return_debug: bool = False):
         if not best_doc:
             return "❌ Không đủ dữ liệu để trả lời câu hỏi này."
 
-        # STEP 4: context — include top-3 docs for richer context
+        # STEP 4: context — include top-3 remaining docs by the same
+        # relevance score select_best_doc() used, not retrieval order.
+        # (Retrieval order puts kw/semantic hits first and any
+        # procedure-intent augmented docs last — a positional docs[:3]
+        # would silently drop exactly the hồ sơ/trình tự articles the
+        # procedure-intent boost above was added to surface.)
+        q_counter = Counter([w for w in tokenize(question) if w not in STOPWORDS])
+        intent = detect_query_constraints(question)["intent"]
+        ranked_extra = sorted(
+            (d for d in docs if d.page_content != best_doc.page_content),
+            key=lambda d: _score_doc(question, d, q_counter, intent),
+            reverse=True,
+        )
+        if intent == "procedure":
+            # Fill the extra context slots with establishment-doc-type docs
+            # first (see _ESTABLISHMENT_DOC_TYPES) so a "thành lập X"
+            # question's hồ sơ/trình tự/cấp GCN articles all make it into
+            # context, even when a single one of them still scores below an
+            # ownership/rights article that shares more raw vocabulary.
+            procedure_first = [
+                d for d in ranked_extra
+                if d.metadata.get("doc_type", "") in _ESTABLISHMENT_DOC_TYPES
+            ]
+            others = [d for d in ranked_extra if d not in procedure_first]
+            ranked_extra = procedure_first + others
         context_parts = [best_doc.page_content]
-        extra_docs = []
-        for extra_doc in docs[:3]:
-            if extra_doc.page_content != best_doc.page_content:
-                context_parts.append(extra_doc.page_content)
-                extra_docs.append(extra_doc)
+        extra_docs = ranked_extra[:3]
+        context_parts += [d.page_content for d in extra_docs]
         context = "\n\n---\n\n".join(context_parts)[:3000]
 
         # STEP 5: classify using doc_type metadata
@@ -1153,8 +1323,19 @@ def ask_rag(question: str, return_debug: bool = False):
                 "Vui lòng đặt lại câu hỏi cụ thể hơn."
             )
 
-        # STEP 9: citation (pass answer + extra_docs for secondary sources)
-        final_answer = answer + build_citation(best_doc.metadata, answer, extra_docs, context)
+        # STEP 8.2: splice in "Căn cứ pháp lý" — built the same way as the
+        # citation footer below (best_doc/extra_docs metadata only), never
+        # written by the LLM itself (see build_legal_basis_line docstring).
+        legal_basis = build_legal_basis_line(best_doc.metadata, extra_docs, best_doc.page_content, answer)
+        if legal_basis:
+            marker = "**Phân tích:**"
+            idx = answer.find(marker)
+            if idx != -1:
+                answer = answer[:idx] + f"**Căn cứ pháp lý:** {legal_basis}\n" + answer[idx:]
+
+        # STEP 9: citation — built strictly from best_doc/extra_docs metadata,
+        # never from article numbers appearing in the LLM-generated answer.
+        final_answer = answer + build_citation(best_doc.metadata, extra_docs, best_doc.page_content, answer)
 
         if return_debug:
             return {
