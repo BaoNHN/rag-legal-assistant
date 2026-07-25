@@ -370,6 +370,8 @@ Ngay khi mở tab, hệ thống tự gọi `GET /latest_eval_result` và hiển 
 
 File `Dataset/example_sheet.xlsx` minh hoạ đúng quy ước đặt tên: sheet **`Demo_Quick_example`** (tiền tố `Demo_`) cho Quick Evaluation, sheet **`Dataset_example`** (tiền tố `Dataset_`) cho Full Evaluation. Đổi tên sheet sang tiền tố khác sẽ khiến sheet đó biến mất khỏi cả dropdown lẫn 2 nút đánh giá — `list_available_datasets()`/`run_evaluation()` trong `engine/evaluate_engine.py` chỉ quét đúng theo 2 tiền tố này.
 
+> **Cập nhật 2026-07-26:** `example_sheet.xlsx` từng thiếu nhiều cột so với `enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx` thật (8/14 cột ở sheet `Dataset_example`/`Demo_Quick_example`, sai hẳn cấu trúc ở `Legal_Update_2025`) — quan trọng nhất là thiếu cả cột `retrieval_keywords`, khiến ai dùng file mẫu để tạo dataset mới sẽ vô tình lặp lại lỗi thiếu keywords (xem mục 13.7). Đã cập nhật khớp 100% cột với file dataset thật ở cả 4 sheet.
+
 > Nếu file được chọn **không có sheet Demo** mà vẫn bấm Quick Evaluation (hoặc gọi thẳng API), hệ thống báo lỗi: `❌ File '<tên file>' không có sheet Demo — không thể chạy Quick Evaluation cho file này.` Tương tự với Full Evaluation và sheet Dataset. Đây là bộ đánh giá đọc trực tiếp từ file `.xlsx` đã chọn trên đĩa, **không** liên quan tới `chat.db`/ChromaDB.
 
 ### Bước 3: Theo Dõi Tiến Trình & Kết Quả
@@ -549,7 +551,7 @@ rag-legal-assistant-master/
 │   └── evaluate_engine.py           # Đánh giá chất lượng RAG (auto/llm, demo/all/test)
 ├── database/
 │   ├── database.py                  # SQLite: users (3 role), chats, messages
-│   └── reference_source.py          # Script rời — thêm thủ công vài điều luật tham khảo (không qua UI)
+│   └── reference_source.py          # Script rời — thêm thủ công vài điều luật tham khảo (không qua UI); chạy `python -m database.reference_source` (lệnh có trong terminal.txt), dedupe theo (so_ky_hieu, article_number) nên chạy lại nhiều lần an toàn
 ├── templates/
 │   ├── login.html                   # Đăng nhập + đổi mật khẩu
 │   ├── index.html                   # Giao diện chat chính
@@ -645,6 +647,22 @@ Chat giáo viên và học sinh được tách biệt hoàn toàn theo cột `ro
 - **`filter_compatible_docs()`** (`rag_engine.py`): trước khi rerank, loại khỏi danh sách ứng viên mọi tài liệu có loại hình doanh nghiệp xung đột với câu hỏi (VD câu hỏi về "TNHH một thành viên" sẽ loại tài liệu "TNHH hai thành viên trở lên", công ty cổ phần, doanh nghiệp tư nhân, công ty hợp danh). Loại hình được suy luận bằng `infer_doc_entity()` — quét `page_content`/`topic`/`retrieval_keywords`/`title` vì metadata hiện tại chưa có trường `entity_type` riêng. Tài liệu không xác định được loại hình (điều khoản áp dụng chung) luôn được giữ lại thay vì loại nhầm.
 - **`validate_answer_citations()`** (`rag_engine.py`): sau khi LLM sinh câu trả lời, nếu bất kỳ số Điều nào xuất hiện trong phần **thân** câu trả lời không có mặt trong context đã truy xuất, toàn bộ câu trả lời bị từ chối (trả về cảnh báo) thay vì hiển thị — khác với whitelist `CITATION_SOURCE` ở mục 13.4 vốn chỉ kiểm tra dòng trích dẫn cuối, cơ chế này chặn cả trường hợp LLM viết sai số Điều ngay trong nội dung trả lời.
 - Xem thêm `evaluate/retrieval_regression_tests.py` — bộ test nhanh (không gọi LLM) kiểm tra các cặp câu hỏi dễ nhầm loại hình doanh nghiệp, nên chạy lại sau khi sửa logic truy xuất/rerank hoặc import dữ liệu mới.
+
+---
+
+### 13.7 "Căn Cứ Pháp Lý", Chấm Điểm Rerank & Chịu Lỗi Chính Tả (thêm 2026-07-25/26)
+
+Loạt sửa lỗi sau khi rà soát kỹ file `25-7 nhan xet.docx` và đo Quick Evaluation nhiều vòng liên tiếp (~62% → 81.8%):
+
+- **`build_legal_basis_line()`** (`rag_engine.py`): mục **"Căn cứ pháp lý"** trong câu trả lời (giữa Kết luận và Phân tích) giờ được **code tự build** từ metadata `best_doc`/`extra_docs` — y hệt cách "Nguồn chính"/"Nguồn tham khảo" đã hoạt động — thay vì để LLM tự viết theo gợi ý trong prompt. Trước đây LLM đôi khi viết lệch (VD ghi "Điều 74" trong khi "Nguồn chính" đúng là "Điều 21"), gây mâu thuẫn ngay trong cùng một câu trả lời.
+- **`_detect_khoan()`**: khi tài liệu gốc là một Điều luật có nhiều khoản đánh số, hệ thống so khớp từ ngữ giữa câu trả lời và từng khoản để hiển thị chính xác **"Khoản N Điều X"** thay vì chỉ "Điều X" — chỉ áp dụng khi một khoản rõ ràng nổi bật hơn hẳn các khoản còn lại, mơ hồ thì giữ nguyên cả Điều.
+- **`_strip_tone()` / `_phrase_in()`**: các danh sách cụm từ nhận diện ý định câu hỏi (`_INTENT_PROCEDURE_PHRASES`...) và loại hình doanh nghiệp (`_ENTITY_ONE_MEMBER_PHRASES`...) giờ **chịu được lỗi thiếu dấu thanh** (sắc/huyền/hỏi/ngã/nặng — VD gõ "lâp" thay vì "lập"). Trước đây chỉ cần thiếu 1 dấu là so khớp chuỗi con trượt hoàn toàn, khiến câu hỏi rơi về intent "general", mất hẳn ưu tiên truy xuất tài liệu thủ tục thành lập. *Giới hạn:* chỉ chịu được thiếu dấu thanh, chưa xử lý gõ không dấu hoàn toàn (bỏ luôn ă/â/ê/ô/ơ/ư/đ).
+- **`_score_doc()` cân bằng lại trọng số**: bonus "nguồn chính thống" (văn bản luật gốc từ Cổng thông tin chính phủ) giảm từ +20 xuống +6; trọng số khớp từ khóa đơn lẻ cho các đoạn luật gốc mới import (`import_source="law"`) giảm từ 3x xuống 1x — tránh việc một Điều luật gốc chỉ trùng từ chung chung ("công ty", "cổ đông"...) thắng điểm so với đúng Điều luật cần tìm. Đồng thời phạt điểm nhóm `doc_type` bắt đầu bằng `convert_*` (chuyển đổi loại hình) trừ khi câu hỏi thực sự hỏi về chuyển đổi — tránh hòa điểm với các Điều về thành lập/định nghĩa cùng loại hình.
+- **`_ENTITY_AGNOSTIC_DOC_TYPES`**: các `doc_type` mang tính điều kiện chung cho MỌI loại hình doanh nghiệp (`establishment_eligibility`, `civil_capacity_condition`, `household_business_eligibility_condition`) giờ luôn được `infer_doc_entity()` trả về "không xác định loại hình" thay vì suy luận nhầm — trước đây một Điều luật tổng quát như Điều 17 (quyền thành lập) bị gán nhầm là "công ty cổ phần" chỉ vì tiêu đề có nhắc "mua cổ phần", khiến nó bị loại khỏi mọi câu hỏi về loại hình khác.
+- **`_is_out_of_scope()`**: thêm `_BUSINESS_CONTEXT_SIGNALS` — một câu hỏi dính từ khóa "ngoài phạm vi" (VD "hình sự", "gia đình", "quyền sử dụng đất") vẫn được coi là **trong phạm vi** nếu câu hỏi cũng có tín hiệu doanh nghiệp rõ ràng (công ty, doanh nghiệp, góp vốn, thành lập...) — tránh chặn nhầm các câu hỏi Luật Doanh nghiệp hợp lệ chỉ vì nhắc tới điều kiện/lĩnh vực khác như một chi tiết mô tả tình huống.
+- **`engine/import_law_engine.py`**: mỗi Điều luật import từ file luật gốc (PDF/DOCX) giờ có `retrieval_keywords` tự sinh từ tiêu đề Điều (bỏ tiền tố "Điều N.") — trước đây hoàn toàn thiếu trường này khiến các Điều luật gốc luôn thua điểm so với dữ liệu Excel curated.
+- **`engine/import_dataset_engine.py`**: sửa bug thật trong `_build_qa_docs()` — hàm đọc đúng cột `retrieval_keywords` từ file Excel nhưng **quên đưa vào metadata** khi tạo chunk cho sheet `Dataset_*`/`Demo_*` (chỉ nhét vào nội dung text, không set field mà `_score_doc()` thực sự dùng để chấm điểm). **Cần re-import lại dataset đã có** (xoá qua Manage Law rồi import lại — xem mục 11) để chunk cũ được cập nhật, vì cơ chế chống trùng theo `doc_id` sẽ bỏ qua nếu import chồng lên mà không xoá trước.
+- **Prompt (`build_prompt()`)**: thêm quy tắc — nếu câu hỏi về TNHH MỘT thành viên, không liệt kê "danh sách thành viên" trong hồ sơ đăng ký (mục này chỉ áp dụng công ty TNHH hai thành viên trở lên); và quy tắc chung — nội dung tài liệu không áp dụng cho câu hỏi thì **bỏ hẳn** khỏi câu trả lời, không ghi kèm kiểu "(không áp dụng)" gây rối trọng tâm.
 
 ---
 
@@ -769,6 +787,13 @@ DEVICE=cuda
 **Đã khắc phục:** Đổi sang trích riêng số theo sau từ khoá "Điều" (`_extract_article_numbers`), có fallback theo số hiệu văn bản/nghị định khi tham chiếu không chứa "Điều" (VD chỉ có `"76/2025/QH15"`). Xác minh trên dữ liệu thật: 14/50 câu chuyển từ chấm sai (0 điểm) sang chấm đúng (3 điểm), không có câu nào bị chấm sai theo chiều ngược lại.
 
 **Nếu vẫn thấy điểm bất thường:** Kiểm tra định dạng cột `article_reference` trong file dataset — chấm điểm chỉ nhận diện được số Điều đứng ngay sau từ "Điều" (không phân biệt hoa/thường), các dạng viết tắt khác (VD chỉ ghi số Điều mà không có chữ "Điều") sẽ không được nhận diện.
+
+**Đợt sửa tiếp theo (2026-07-25/26) — riêng chỉ số `hallucination` và `clarity` bị chấm oan:**
+
+- **`hallucination` đếm trùng lặp:** câu trả lời hợp lệ nhắc lại cùng một số Điều ở cả "Căn cứ pháp lý" lẫn phần "Nguồn tham khảo" footer (xem mục 13.7) — bản cũ đếm theo `list` nên mỗi lần lặp lại bị trừ điểm thêm một lần. Đã đổi sang đếm theo `set` (không trùng lặp).
+- **`hallucination` phạt oan các Điều bổ sung hợp lệ:** một câu trả lời "thành lập X" đúng đắn thường trích dẫn nhiều Điều cùng lúc (hồ sơ + trình tự + định nghĩa — xem `build_legal_basis_line()` mục 13.7), nhưng cột `article_reference` trong dataset chỉ liệt kê **một** Điều làm đáp án mẫu, khiến các Điều còn lại — dù đúng — vẫn bị tính là "hallucination". Đã sửa: một số Điều chỉ bị coi là hallucination nếu **không xuất hiện trong `retrieved_context` thật** (ngữ cảnh RAG đã truy xuất cho câu hỏi đó) — cùng nguyên tắc `validate_answer_citations()` đang dùng trong app thật (mục 13.6). Đồng thời cột `expected_retrieved_context` (nếu dataset có điền) cũng được cộng vào tập "đúng" khi chấm `citation_correct`/`hallucination`.
+- **`clarity` tính nhầm độ dài footer:** word-count trước đây tính luôn cả phần "📖 Nguồn chính / 📎 Nguồn tham khảo" (không phải văn xuôi, là metadata trích dẫn hệ thống tự thêm) vào tổng số từ, khiến câu trả lời có nhiều nguồn tham khảo dễ vượt trần 200 từ và bị trừ điểm oan. Đã sửa: chỉ đếm phần thân câu trả lời, bỏ qua mọi thứ từ "📖 Nguồn chính:" trở đi.
+- **Kết quả đo thực tế trên `Demo_30`+`Demo_50` (auto mode):** 62.2% → 65.0% → 71.5% → 81.8% → **88.5%** qua các đợt sửa trên (mỗi đợt đo lại bằng Quick Evaluation thật, không ước lượng) — riêng bước cuối (chấm hallucination dựa trên `retrieved_context` grounded, không chỉ dựa vào 1 đáp án mẫu duy nhất) đưa `hallucination` từ 1.52/3 lên 2.86/3.
 
 ---
 

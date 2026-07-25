@@ -232,6 +232,7 @@ def _build_qa_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, im
                 "topic":             topic,
                 "article_reference": article_ref,
                 "article_number":    article_num,
+                "retrieval_keywords": keywords,
                 "source_url":        source_url,
                 "char_count":        len(content),
                 "import_source":     "dataset",

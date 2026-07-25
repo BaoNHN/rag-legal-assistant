@@ -29,6 +29,17 @@ OUT_OF_SCOPE_KEYWORDS = [
     "hải quan", "xuất nhập khẩu", "hành chính công",
 ]
 
+# An OUT_OF_SCOPE_KEYWORDS hit is overridden when the question also carries
+# one of these — it's very likely a genuine Enterprise Law question that
+# only references the other domain as supporting context (a disqualifying
+# condition, a funding source, a contributed asset), not a question actually
+# about that domain. See _is_out_of_scope().
+_BUSINESS_CONTEXT_SIGNALS = [
+    "công ty", "doanh nghiệp", "hộ kinh doanh", "cổ đông", "cổ phần",
+    "thành viên", "vốn điều lệ", "góp vốn", "thành lập", "đăng ký kinh doanh",
+    "chủ sở hữu",
+]
+
 SIMILARITY_THRESHOLD = 1.3  # L2 distance; above this → not relevant enough
 PROCEDURE_PATTERNS = [
     "trình tự",
@@ -498,12 +509,29 @@ def detect_query_constraints(question: str) -> dict:
     return {"entity_type": _detect_entity_type(q), "intent": intent}
 
 
+# Doc types that state a rule applicable to ALL business entity types (who
+# may establish a business, civil capacity/age conditions, general
+# registration procedure...) rather than one specific structure. Left to
+# text inference, an incidental keyword — e.g. Điều 17 (quyền thành lập,
+# entity-agnostic) mentions "mua cổ phần" only as one of several rights it
+# lists, which _ENTITY_JSC_PHRASES matches on "cổ phần" alone — would wrongly
+# scope a general provision to one entity type and get it excluded by
+# filter_compatible_docs() for every OTHER question (e.g. Điều 17 never
+# surfacing for a TNHH một thành viên question — 2026-07-25 eval review).
+_ENTITY_AGNOSTIC_DOC_TYPES = {
+    "establishment_eligibility", "civil_capacity_condition",
+    "household_business_eligibility_condition",
+}
+
+
 def infer_doc_entity(doc) -> str | None:
     """Entity type of a retrieved Document. Checks an explicit entity_type/
     doc_type metadata field first (forward-compatible with future imports
     that tag it), then falls back to text inference — no currently indexed
     chunk actually carries that field yet."""
     metadata = doc.metadata or {}
+    if metadata.get("doc_type") in _ENTITY_AGNOSTIC_DOC_TYPES:
+        return None
     explicit = _detect_entity_type(metadata.get("entity_type") or metadata.get("doc_type") or "")
     if explicit:
         return explicit
@@ -783,13 +811,26 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str) -> int:
         if w in content:
             score += cnt
 
-    # metadata keywords — single word match
+    # metadata keywords — single word match. Curated dataset entries
+    # (import_source="dataset") hand-pick short, distinctive keyword phrases,
+    # so a single-word hit there is a meaningful signal. Law-import chunks
+    # (import_source="law") instead get retrieval_keywords auto-derived from
+    # their own article heading (see import_law_engine.py) — a whole
+    # sentence-topic, not curated, so common domain words it shares with
+    # dozens of other articles in the same chapter ("công ty", "cổ đông"...)
+    # would otherwise rack up the same 3x credit as a genuinely specific
+    # curated match. Downweighting law-import matches to the same 1x as raw
+    # content overlap fixed a regression where a topically-adjacent-but-wrong
+    # official article (e.g. Điều 149 sharing "cổ đông" with the question)
+    # outscored the actually-correct curated chunk (Điều 111) on a scenario
+    # question — see 2026-07-25 eval-score-drop investigation.
     kw_field = metadata.get("retrieval_keywords", "")
     kw_text = kw_field.lower().replace(";", " ")
+    kw_word_weight = 1 if metadata.get("import_source") == "law" else 3
 
     for w, cnt in q_counter.items():
         if w in kw_text:
-            score += cnt * 3
+            score += cnt * kw_word_weight
 
     # Multi-word keyword phrase match (high precision boost)
     # Matches "công ty hợp danh", "thành viên hợp danh" etc.
@@ -814,10 +855,14 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str) -> int:
     # Source-tier priority: official law text > standardized KB > raw Q&A
     # dataset. Markers/thresholds taken from what's actually indexed
     # today (see engine.rag_engine module — law chunks are tagged
-    # nguon_thu_thap="Cổng thông tin chính phủ").
+    # nguon_thu_thap="Cổng thông tin chính phủ"). Kept small (a tiebreaker,
+    # not a dominant force) — it used to be +20, which combined with the
+    # kw_word_weight above let a merely topically-adjacent official article
+    # systematically outrank the actually-correct curated chunk on scenario
+    # questions with repeated common terms (see kw_word_weight comment).
     nguon_lower = nguon.lower()
     if any(marker in nguon_lower for marker in _OFFICIAL_SOURCE_MARKERS):
-        score += 20
+        score += 6
     if "kb_articles_updated" in nguon_lower:
         score += 10
     if "dataset_200" in nguon_lower:
@@ -841,6 +886,18 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str) -> int:
     # land them in the top context slots.
     if intent == "procedure" and metadata.get("doc_type", "") in _ESTABLISHMENT_DOC_TYPES:
         score += 25
+
+    # "Chuyển đổi loại hình doanh nghiệp" articles (convert_jsc_to_single_llc,
+    # convert_llc_to_jsc...) share almost all of their vocabulary with a
+    # plain "thành lập/là gì" question about the resulting entity type
+    # ("công ty TNHH một thành viên" appears in both a definition article AND
+    # "chuyển đổi công ty cổ phần THÀNH công ty TNHH một thành viên"), which
+    # was enough to tie with — and by iteration-order luck, sometimes beat —
+    # the actually relevant article (see 2026-07-25 "Điều 203 in Nguồn tham
+    # khảo" report). Penalize unless the question is actually about
+    # conversion.
+    if metadata.get("doc_type", "").startswith("convert_") and not _phrase_in("chuyển đổi", question):
+        score -= 20
 
     return score
 
@@ -938,7 +995,9 @@ def build_prompt(context: str, question: str, q_type: str,
 - KHÔNG được tự đặt tên nguồn, mã văn bản, tên tác giả/giảng viên hay bất kỳ trích dẫn nào — phần nguồn tài liệu và phần "Căn cứ pháp lý" do hệ thống tự thêm vào sau, bạn không viết 2 phần đó.
 - KHÔNG tự thêm tình tiết, số liệu hay điều kiện không có trong câu hỏi của người dùng.
 - KHÔNG chuyển đổi loại hình doanh nghiệp nêu trong câu hỏi (vd: từ "một thành viên" sang "hai thành viên trở lên", hoặc ngược lại) khi trả lời.
+- Nếu câu hỏi về công ty TNHH MỘT thành viên, KHÔNG được liệt kê "danh sách thành viên" trong hồ sơ đăng ký dù tài liệu có nhắc tới — mục này chỉ áp dụng cho công ty TNHH hai thành viên trở lên.
 - KHÔNG dùng nội dung của một tình huống/case cụ thể để trả lời một câu hỏi mang tính khái quát, trừ khi người dùng thực sự hỏi về tình huống đó.
+- Với bất kỳ nội dung nào trong tài liệu không áp dụng cho câu hỏi (sai loại hình doanh nghiệp, sai đối tượng...), hãy BỎ HẲN nội dung đó khỏi câu trả lời — KHÔNG liệt kê rồi ghi chú kiểu "(không áp dụng)", vì làm vậy khiến câu trả lời mất trọng tâm.
 - Nếu Tài liệu bên dưới KHÔNG đủ để trả lời đúng câu hỏi, phải trả lời: "Không đủ dữ liệu để kết luận." thay vì suy diễn.
 {article_hint}
 Tài liệu:
@@ -1158,7 +1217,19 @@ def build_citation(meta: dict, secondary_docs=None, content: str = "", answer: s
 # =========================
 def _is_out_of_scope(question: str) -> bool:
     q = question.lower()
-    return any(kw in q for kw in OUT_OF_SCOPE_KEYWORDS)
+    if not any(kw in q for kw in OUT_OF_SCOPE_KEYWORDS):
+        return False
+    # An OUT_OF_SCOPE_KEYWORDS hit alone over-blocks: "C đang bị truy cứu
+    # trách nhiệm hình sự nhưng muốn thành lập doanh nghiệp tư nhân..." is a
+    # genuine Enterprise Law eligibility question (Điều 17) that only
+    # mentions "hình sự" as a disqualifying condition, not a criminal-law
+    # question. Same for "gia đình góp vốn" (family funding a company) and
+    # "góp vốn bằng quyền sử dụng đất" (land-use rights as capital) — both
+    # got wrongly blocked in the 2026-07-25 eval review. If the question also
+    # carries a clear Enterprise Law signal, treat it as in-scope; the answer
+    # pipeline still falls back to "Không đủ dữ liệu để kết luận." if nothing
+    # relevant is actually retrieved.
+    return not any(sig in q for sig in _BUSINESS_CONTEXT_SIGNALS)
 
 
 # ── Meta: hỏi về database/hệ thống ──────────────────

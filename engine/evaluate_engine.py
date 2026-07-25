@@ -141,14 +141,25 @@ def _extract_law_numbers(article_ref: str) -> list:
 
 
 def _auto_score(question: str, generated: str, expected: str,
-                article_ref: str, keywords: str, retrieved_context: str) -> dict:
+                article_ref: str, keywords: str, retrieved_context: str,
+                expected_retrieved_context: str = "") -> dict:
     gen_lower = generated.lower()
     exp_lower = expected.lower()
     scores    = {}
 
-    art_nums = _extract_article_numbers(article_ref)
-    if art_nums:
-        cite_ok = any(re.search(rf'điều\s+{re.escape(n)}\b', gen_lower) for n in art_nums)
+    # expected_retrieved_context (Dataset_*/Demo_* column, previously unused
+    # by the scorer) is a richer ground truth than the single article_ref —
+    # a good answer to a "thành lập X" question legitimately cites several
+    # articles together (hồ sơ + trình tự + định nghĩa, see
+    # build_legal_basis_line() in rag_engine.py), and article_ref alone often
+    # only names one of them. Any "Điều N" also named in
+    # expected_retrieved_context counts as correct too, not just the one in
+    # article_ref.
+    ctx_nums     = set(_extract_article_numbers(expected_retrieved_context)) if expected_retrieved_context else set()
+    art_nums     = _extract_article_numbers(article_ref)
+    correct_nums = set(art_nums) | ctx_nums
+    if correct_nums:
+        cite_ok = any(re.search(rf'điều\s+{re.escape(n)}\b', gen_lower) for n in correct_nums)
     else:
         law_nums = _extract_law_numbers(article_ref)
         cite_ok = any(n.lower() in gen_lower for n in law_nums) if law_nums else False
@@ -169,17 +180,45 @@ def _auto_score(question: str, generated: str, expected: str,
     else:
         scores["retrieval_relevance"] = 0
 
-    if art_nums:
-        correct_nums = set(art_nums)
-        cited_arts   = re.findall(r'điều\s+(\d+[a-z]?)', gen_lower)
-        wrong_arts   = [a for a in cited_arts if a not in correct_nums]
+    if correct_nums:
+        # Dedupe before counting "wrong" hits — the answer body legitimately
+        # repeats the same article numbers between "Căn cứ pháp lý" and the
+        # citation footer's "Nguồn chính"/"Nguồn tham khảo" (see
+        # build_legal_basis_line/build_citation in rag_engine.py), and a
+        # richer answer citing several genuinely relevant articles (not just
+        # the single one article_ref lists, but also anything named in
+        # expected_retrieved_context — see correct_nums above) shouldn't be
+        # double- or triple-penalized for each repeat of the same number —
+        # only distinct unexpected numbers count as potential hallucination.
+        cited_arts = set(re.findall(r'điều\s+(\d+[a-z]?)', gen_lower))
+        # A number that actually appears in retrieved_context (what the RAG
+        # pipeline really retrieved for this question) is grounded, not
+        # invented — same principle rag_engine.py's own
+        # validate_answer_citations() gate uses in production: only an
+        # article never seen anywhere in context counts as a hallucination.
+        # Without this, a "thành lập X" answer's legitimate multi-article
+        # Căn cứ pháp lý (hồ sơ + trình tự + GCN alongside the one article
+        # this dataset row names) got flagged as hallucinating on every
+        # extra — genuinely correct — citation (2026-07-25/26 eval review).
+        grounded_nums = correct_nums | (
+            set(re.findall(r'điều\s+(\d+[a-z]?)', retrieved_context.lower())) if retrieved_context else set()
+        )
+        wrong_arts   = cited_arts - grounded_nums
         scores["hallucination"] = 3 if len(wrong_arts) == 0 else (2 if len(wrong_arts) <= 1 else 1)
     else:
         # No "Điều N" in the reference to check cited numbers against (law/decree-
         # name-only citation) — can't reliably detect a wrong article here.
         scores["hallucination"] = 3
 
-    word_count     = len(generated.split())
+    # Word count should measure the answer's own clarity, not the
+    # system-appended citation footer (📖 Nguồn chính / 📎 Nguồn tham khảo —
+    # see build_citation() in rag_engine.py) — that footer is structured
+    # metadata, not prose, and its length has nothing to do with whether the
+    # LLM's actual answer was clear. Counting it in made longer footers
+    # (more secondary sources cited) push otherwise-good answers over the
+    # 200-word ceiling and get penalized for it.
+    body_only  = generated.split("📖 Nguồn chính:")[0]
+    word_count = len(body_only.split())
     scores["clarity"] = 3 if 30 <= word_count <= 200 else (2 if word_count >= 15 else 1)
 
     scores["total"] = round(
@@ -397,6 +436,9 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
             keywords   = str(row.get('retrieval_keywords', '')).strip()
             q_type     = str(row.get('question_type', '')).strip()
             difficulty = str(row.get('difficulty', '')).strip()
+            exp_ctx    = str(row.get('expected_retrieved_context', '')).strip()
+            if exp_ctx.lower() == 'nan':
+                exp_ctx = ''
 
             if not question or question == 'nan':
                 continue
@@ -421,7 +463,7 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
                 sc = _llm_score(question, generated, expected, art_ref, groq_key)
                 time.sleep(3)   # ~20 req/min → stay under Groq free-tier limit
             else:
-                sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context)
+                sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
 
             for k in RUBRIC:
                 score_totals[k].append(sc.get(k, 0))
@@ -555,6 +597,9 @@ def _run_cli(mode: str, split: str):
             keywords   = str(row.get("retrieval_keywords", "")).strip()
             q_type     = str(row.get("question_type", "")).strip()
             difficulty = str(row.get("difficulty",    "")).strip()
+            exp_ctx    = str(row.get("expected_retrieved_context", "")).strip()
+            if exp_ctx.lower() == "nan":
+                exp_ctx = ""
 
             if not question or question == "nan":
                 pbar.update(1)
@@ -579,7 +624,7 @@ def _run_cli(mode: str, split: str):
                 sc = _llm_score(question, generated, expected, art_ref, groq_key)
                 time.sleep(3)
             else:
-                sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context)
+                sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
 
             for k in RUBRIC:
                 score_totals[k].append(sc.get(k, 0))
