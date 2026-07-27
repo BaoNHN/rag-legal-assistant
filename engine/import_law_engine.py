@@ -372,6 +372,8 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
             ))
 
         # ── 5. Build documents ──
+        from engine.rag_engine import detect_entity_type
+
         docs = []
         for i, seg in enumerate(segs):
             m = _re.match(r'Điều\s+(\d+[a-z]?)[.,\s]', seg)
@@ -409,6 +411,15 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
             topic_phrase = _re.sub(r'^Điều\s+\d+[a-z]?[.,]\s*', '', title).strip()
             if topic_phrase:
                 meta["retrieval_keywords"] = topic_phrase
+
+            # Stamp entity_type upfront so infer_doc_entity() hits the cheap
+            # explicit-field path at query time instead of re-scanning seg
+            # text on every retrieval (see rag_engine.backfill_entity_type_tags
+            # docstring — matters once the corpus grows to tens of thousands
+            # of chunks).
+            entity_type = detect_entity_type(f"{title} {seg[:500]}")
+            if entity_type:
+                meta["entity_type"] = entity_type
 
             docs.append(Document(page_content=seg, metadata=meta))
 

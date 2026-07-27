@@ -104,18 +104,18 @@
   <!-- SIDEBAR -->
   <aside class="sidebar">
     <div class="sidebar-header">
-      <button class="new-chat">+ New Chat</button>
+      <button class="new-chat">+ Đoạn chat mới</button>
       <!-- Import Law button — shown for teachers & admins via JS -->
       <a href="/import" class="btn-import-law" id="importLawBtn">
-        📥 Import Law
+        📥 Nhập văn bản luật
       </a>
       <!-- Manage Account button — shown only for admins via JS -->
       <a href="/manage_accounts" class="btn-manage-account" id="manageAccountBtn">
-        👤 Manage Account
+        👤 Quản lý tài khoản
       </a>
       <!-- Manage Law button — shown only for admins via JS -->
       <a href="/manage_law" class="btn-manage-law" id="manageLawBtn">
-        🗂️ Manage Law
+        🗂️ Quản lý văn bản luật
       </a>
     </div>
     <div class="sidebar-chats" id="chat-list"></div>
@@ -125,7 +125,8 @@
     <div class="header">
       Chat Assistant
       <span id="roleBadge"></span>
-      <button onclick="logout()" style="float:right;background:rgba(255,255,255,0.1);border:none;color:white;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;">Logout</button>
+      <button onclick="logout()" style="float:right;background:rgba(255,255,255,0.1);border:none;color:white;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;">Đăng xuất</button>
+      <button id="voiceToggle" onclick="toggleVoice()" title="Chuyển đổi giọng trả lời" style="float:right;background:rgba(255,255,255,0.1);border:none;color:white;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;margin-right:8px;"></button>
     </div>
     <div class="container" id="mainContainer">
 

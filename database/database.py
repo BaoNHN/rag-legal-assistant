@@ -55,6 +55,12 @@ def init_db():
     except Exception:
         pass
 
+    # Rename the legacy "Import new law" status chat to "Thông báo" — the
+    # reserved title used from here on (see NOTIFICATION_CHAT_TITLE below).
+    # NOTIFICATION_CHAT_TITLE isn't defined yet at this point in the file, but
+    # init_db() only ever runs after the whole module has finished loading.
+    c.execute("UPDATE chats SET title=? WHERE title=?", (NOTIFICATION_CHAT_TITLE, "Import new law"))
+
     # ── messages
     c.execute("""
         CREATE TABLE IF NOT EXISTS messages (
@@ -161,6 +167,16 @@ def get_const(name: str) -> str:
 
 
 # =========================
+# CHAT LIMITS / RESERVED NAMES
+# =========================
+# The teacher/admin "import law" status chat is reserved under this exact
+# title — it's excluded from the 5-chat cap and users may not create/rename
+# any chat to exactly this string (substrings like "Thông báo họp" are fine).
+NOTIFICATION_CHAT_TITLE = "Thông báo"
+MAX_CHATS_PER_USER = 5
+
+
+# =========================
 # LOGIN
 # =========================
 ROLE_NAMES = {0: "Student", 1: "Teacher", 2: "Admin"}
@@ -215,7 +231,7 @@ def create_chat(user_id, owner_role: int = 0):
     chat_id = f"chat_{int(time.time()*1000)}"
     c.execute(
         "INSERT INTO chats (id, student_id, title, created_at, role) VALUES (?,?,?,?,?)",
-        (chat_id, user_id, "New Chat", time.time(), owner_role)
+        (chat_id, user_id, "Đoạn chat mới", time.time(), owner_role)
     )
     conn.commit()
     conn.close()
@@ -236,12 +252,25 @@ def get_all_chats(user_id, owner_role: int = 0):
         return [{"id": r[0], "title": r[1]} for r in c.fetchall()]
 
 
-def rename_chat(chat_id, title):
+def rename_chat(chat_id, title) -> bool:
+    """Returns False (no-op) if `title` is exactly the reserved
+    NOTIFICATION_CHAT_TITLE — only an exact match is blocked, a title merely
+    containing the word (e.g. "Thông báo họp lúc 9h") is fine."""
+    if (title or "").strip() == NOTIFICATION_CHAT_TITLE:
+        return False
     conn = sqlite3.connect(DB_NAME)
     c    = conn.cursor()
     c.execute("UPDATE chats SET title=? WHERE id=?", (title, chat_id))
     conn.commit()
     conn.close()
+    return True
+
+
+def get_chat_title(chat_id) -> str | None:
+    conn = sqlite3.connect(DB_NAME)
+    row  = conn.execute("SELECT title FROM chats WHERE id=?", (chat_id,)).fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 def save_message(chat_id, role, text):
@@ -276,7 +305,7 @@ def delete_chat(chat_id: str):
     conn.close()
 
 
-def upsert_import_chat(user_id: int, message: str, title: str = "Import new law"):
+def upsert_import_chat(user_id: int, message: str, title: str = NOTIFICATION_CHAT_TITLE):
     """Create the given teacher-chat title if missing, append message to it."""
     conn  = sqlite3.connect(DB_NAME)
     c     = conn.cursor()

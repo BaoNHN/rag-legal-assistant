@@ -86,6 +86,8 @@ def _parse_meta(meta_str: str) -> dict:
 # ── Sheet processors ──────────────────────────────────────────────────────────
 def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, importer: str) -> list:
     """Process KB_Articles or KB_Articles_Updated sheet."""
+    from engine.rag_engine import detect_entity_type
+
     docs = []
     nguon = f"Luật Doanh nghiệp 2020 - {sheet_name} dataset"
 
@@ -113,25 +115,27 @@ def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, im
             parts.append(f"Ghi chú: {note}")
         content = "\n".join(parts)
 
-        docs.append(Document(
-            page_content=content,
-            metadata={
-                "so_ky_hieu":        SO_KY_HIEU,
-                "loai_van_ban":      LOAI_VAN_BAN,
-                "nguon_thu_thap":    nguon,
-                "article_reference": article_ref,
-                "article_number":    article_num,
-                "chapter":           chapter,
-                "topic":             topic,
-                "doc_type":          doc_type,
-                "retrieval_keywords":keywords,
-                "source_url":        source_url,
-                "char_count":        len(content),
-                "import_source":     "dataset",
-                "source_file":       source_file,
-                "importer":          importer,
-            }
-        ))
+        meta = {
+            "so_ky_hieu":        SO_KY_HIEU,
+            "loai_van_ban":      LOAI_VAN_BAN,
+            "nguon_thu_thap":    nguon,
+            "article_reference": article_ref,
+            "article_number":    article_num,
+            "chapter":           chapter,
+            "topic":             topic,
+            "doc_type":          doc_type,
+            "retrieval_keywords":keywords,
+            "source_url":        source_url,
+            "char_count":        len(content),
+            "import_source":     "dataset",
+            "source_file":       source_file,
+            "importer":          importer,
+        }
+        entity_type = detect_entity_type(f"{topic} {content}")
+        if entity_type:
+            meta["entity_type"] = entity_type
+
+        docs.append(Document(page_content=content, metadata=meta))
     return docs
 
 
@@ -141,6 +145,8 @@ def _build_update_docs(sheet_df: pd.DataFrame, source_file: str, importer: str) 
                     key_change_vi, impact_on_dataset, implemented_in_sheet,
                     source_url, notes
     """
+    from engine.rag_engine import detect_entity_type
+
     docs = []
     for _, row in sheet_df.iterrows():
         article_ref    = _safe(row.get('legal_source',
@@ -175,27 +181,31 @@ def _build_update_docs(sheet_df: pd.DataFrame, source_file: str, importer: str) 
         content     = "\n".join(parts)
         article_num = re.sub(r'[^\d]', '', article_ref) if article_ref else ''
 
-        docs.append(Document(
-            page_content=content,
-            metadata={
-                "so_ky_hieu":        SO_KY_HIEU,
-                "loai_van_ban":      LOAI_VAN_BAN,
-                "nguon_thu_thap":    "Legal_Update_2025",
-                "article_reference": article_ref,
-                "article_number":    article_num,
-                "topic":             topic,
-                "doc_type":          "legal_update_2025",
-                "char_count":        len(content),
-                "import_source":     "dataset",
-                "source_file":       source_file,
-                "importer":          importer,
-            }
-        ))
+        meta = {
+            "so_ky_hieu":        SO_KY_HIEU,
+            "loai_van_ban":      LOAI_VAN_BAN,
+            "nguon_thu_thap":    "Legal_Update_2025",
+            "article_reference": article_ref,
+            "article_number":    article_num,
+            "topic":             topic,
+            "doc_type":          "legal_update_2025",
+            "char_count":        len(content),
+            "import_source":     "dataset",
+            "source_file":       source_file,
+            "importer":          importer,
+        }
+        entity_type = detect_entity_type(f"{topic} {content}")
+        if entity_type:
+            meta["entity_type"] = entity_type
+
+        docs.append(Document(page_content=content, metadata=meta))
     return docs
 
 
 def _build_qa_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, importer: str) -> list:
     """Process any Dataset_* Q&A sheet."""
+    from engine.rag_engine import detect_entity_type
+
     docs = []
     for _, row in sheet_df.iterrows():
         q_id        = _safe(row.get('id', ''))
@@ -220,26 +230,28 @@ def _build_qa_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, im
         content     = "\n".join(parts)
         article_num = re.sub(r'[^\d]', '', article_ref)
 
-        docs.append(Document(
-            page_content=content,
-            metadata={
-                "so_ky_hieu":        SO_KY_HIEU,
-                "loai_van_ban":      LOAI_VAN_BAN,
-                "nguon_thu_thap":    f"{sheet_name} Q&A pairs",
-                "doc_id":            q_id,
-                "question_type":     q_type,
-                "difficulty":        difficulty,
-                "topic":             topic,
-                "article_reference": article_ref,
-                "article_number":    article_num,
-                "retrieval_keywords": keywords,
-                "source_url":        source_url,
-                "char_count":        len(content),
-                "import_source":     "dataset",
-                "source_file":       source_file,
-                "importer":          importer,
-            }
-        ))
+        meta = {
+            "so_ky_hieu":        SO_KY_HIEU,
+            "loai_van_ban":      LOAI_VAN_BAN,
+            "nguon_thu_thap":    f"{sheet_name} Q&A pairs",
+            "doc_id":            q_id,
+            "question_type":     q_type,
+            "difficulty":        difficulty,
+            "topic":             topic,
+            "article_reference": article_ref,
+            "article_number":    article_num,
+            "retrieval_keywords": keywords,
+            "source_url":        source_url,
+            "char_count":        len(content),
+            "import_source":     "dataset",
+            "source_file":       source_file,
+            "importer":          importer,
+        }
+        entity_type = detect_entity_type(f"{topic} {content}")
+        if entity_type:
+            meta["entity_type"] = entity_type
+
+        docs.append(Document(page_content=content, metadata=meta))
     return docs
 
 

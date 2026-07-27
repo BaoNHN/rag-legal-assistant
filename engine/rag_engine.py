@@ -326,6 +326,47 @@ def backfill_import_source_tags():
         vectorstore._collection.update(ids=update_ids, metadatas=update_metas)
 
 
+def backfill_entity_type_tags():
+    """One-time migration for chunks indexed before import pipelines started
+    stamping entity_type at import time (see detect_entity_type() calls in
+    import_law_engine.py / import_dataset_engine.py / import_scenario_engine.py).
+    Computes it from the same text fields infer_doc_entity()'s runtime
+    fallback already scans (page_content/topic/retrieval_keywords/title), so
+    future retrieval hits the cheap explicit-field path instead of
+    re-inferring from raw text on every question — matters once the corpus
+    grows to tens of thousands of chunks. Idempotent — only touches chunks
+    missing entity_type, safe to call on every startup."""
+    try:
+        data = vectorstore.get(include=["metadatas", "documents"])
+    except Exception:
+        return
+
+    ids   = data.get("ids") or []
+    metas = data.get("metadatas") or []
+    docs  = data.get("documents") or []
+
+    update_ids, update_metas = [], []
+    for doc_id, m, content in zip(ids, metas, docs):
+        if m.get("entity_type") or m.get("doc_type") in _ENTITY_AGNOSTIC_DOC_TYPES:
+            continue
+        text = " ".join([
+            str(content or ""),
+            str(m.get("topic") or ""),
+            str(m.get("retrieval_keywords") or ""),
+            str(m.get("title") or ""),
+        ])
+        entity_type = detect_entity_type(text)
+        if not entity_type:
+            continue
+        new_meta = dict(m)
+        new_meta["entity_type"] = entity_type
+        update_ids.append(doc_id)
+        update_metas.append(new_meta)
+
+    if update_ids:
+        vectorstore._collection.update(ids=update_ids, metadatas=update_metas)
+
+
 def list_dataset_sources() -> list:
     """Distinct uploaded .xlsx filenames among dataset-origin chunks, with
     chunk counts."""
@@ -402,6 +443,9 @@ def delete_scenario_source(name: str) -> int:
 refresh_citation_sources()
 backfill_import_source_tags()
 backfill_importer_tags()
+# backfill_entity_type_tags() runs at the true bottom of this module (after
+# ask_rag) — it needs _ENTITY_AGNOSTIC_DOC_TYPES/detect_entity_type, both
+# defined further down the file, not yet bound at this point in module load.
 
 
 def similarity(a: str, b: str) -> float:
@@ -487,6 +531,14 @@ def _detect_entity_type(text: str) -> str | None:
     if any(_phrase_in(p, t) for p in _ENTITY_PRIVATE_PHRASES):
         return "private_enterprise"
     return None
+
+
+# Public alias — import_law_engine.py / import_dataset_engine.py /
+# import_scenario_engine.py call this at import time to stamp entity_type
+# into chunk metadata upfront (see backfill_entity_type_tags() docstring
+# above for why this matters at scale). Internal call sites in this module
+# keep using the private name.
+detect_entity_type = _detect_entity_type
 
 
 _INTENT_PROCEDURE_PHRASES = [
@@ -974,8 +1026,24 @@ def classify_question(question: str, best_doc=None) -> str:
 # =========================
 # BUILD PROMPT
 # =========================
+
+# Two response tones (see build_prompt's `voice` param): "formal" (default)
+# keeps the existing strict legal/scientific wording untouched; "casual"
+# layers on plain-language instructions without relaxing any of the
+# citation/hallucination QUY TẮC BẮT BUỘC below — only wording style changes.
+_VOICE_INSTRUCTIONS = {
+    "casual": (
+        "\n🗣️ VĂN PHONG: Trả lời theo kiểu đời thường, dễ hiểu, như đang giải thích cho người "
+        "không rành luật — dùng câu ngắn, từ ngữ thông dụng. Nếu bắt buộc phải dùng thuật ngữ "
+        "pháp lý, giải thích ngắn gọn trong ngoặc đơn ngay sau đó. Vẫn phải giữ đúng cấu trúc "
+        "Kết luận/Phân tích/Lưu ý và đúng số Điều luật như quy định — chỉ đổi cách diễn đạt, "
+        "KHÔNG được bớt hay đổi nội dung pháp lý.\n"
+    ),
+}
+
+
 def build_prompt(context: str, question: str, q_type: str,
-                 article_ref: str = "", topic: str = "") -> str:
+                 article_ref: str = "", topic: str = "", voice: str = "formal") -> str:
     article_hint = ""
     if article_ref:
         line = article_ref
@@ -983,8 +1051,10 @@ def build_prompt(context: str, question: str, q_type: str,
             line += f" — {topic}"
         article_hint = f"\nCăn cứ pháp lý: {line}\n"
 
-    base = f"""Bạn là trợ lý pháp lý Việt Nam chuyên về Luật Doanh nghiệp.
+    voice_hint = _VOICE_INSTRUCTIONS.get(voice, "")
 
+    base = f"""Bạn là trợ lý pháp lý Việt Nam chuyên về Luật Doanh nghiệp.
+{voice_hint}
 ⚠️ QUY TẮC BẮT BUỘC:
 - Câu trả lời TỐI ĐA 200 từ.
 - Không chào hỏi, không giải thích dư thừa.
@@ -1294,7 +1364,7 @@ def _answer_meta_law_count(question: str) -> str:
         return f"❌ Lỗi: {e}"
 
 
-def ask_rag(question: str, return_debug: bool = False):
+def ask_rag(question: str, return_debug: bool = False, voice: str = "formal"):
     try:
         question = str(question)
 
@@ -1340,8 +1410,9 @@ def ask_rag(question: str, return_debug: bool = False):
         if not best_doc:
             return "❌ Không đủ dữ liệu để trả lời câu hỏi này."
 
-        # STEP 4: context — include top-3 remaining docs by the same
-        # relevance score select_best_doc() used, not retrieval order.
+        # STEP 4: rank the full candidate-document pool (best_doc first) —
+        # used both to fill "extra context" docs and, per STEP 5-8.1's retry
+        # loop below, as fallback primary documents.
         # (Retrieval order puts kw/semantic hits first and any
         # procedure-intent augmented docs last — a positional docs[:3]
         # would silently drop exactly the hồ sơ/trình tự articles the
@@ -1365,34 +1436,40 @@ def ask_rag(question: str, return_debug: bool = False):
             ]
             others = [d for d in ranked_extra if d not in procedure_first]
             ranked_extra = procedure_first + others
-        context_parts = [best_doc.page_content]
-        extra_docs = ranked_extra[:3]
-        context_parts += [d.page_content for d in extra_docs]
-        context = "\n\n---\n\n".join(context_parts)[:3000]
+        all_ranked = [best_doc] + ranked_extra
 
-        # STEP 5: classify using doc_type metadata
-        q_type = classify_question(question, best_doc)
+        # STEP 5-8.1: generate an answer from the best-ranked doc; if
+        # validate_answer_citations() rejects it (the answer names an "Điều N"
+        # never actually seen in that doc's context — usually the LLM
+        # inventing/misremembering a number), retry with the 2nd- and then
+        # 3rd-best-ranked doc as primary before giving up. Each attempt
+        # rebuilds its own context/classification/prompt around its primary doc.
+        winner = None
+        for primary in all_ranked[:3]:
+            extra_docs   = [d for d in all_ranked if d is not primary][:3]
+            context_parts = [primary.page_content] + [d.page_content for d in extra_docs]
+            context = "\n\n---\n\n".join(context_parts)[:3000]
 
-        # STEP 6: prompt with article hint
-        article_ref = best_doc.metadata.get("article_reference", "")
-        topic = best_doc.metadata.get("topic", "")
-        prompt = build_prompt(context, question, q_type, article_ref, topic)
+            q_type      = classify_question(question, primary)
+            article_ref = primary.metadata.get("article_reference", "")
+            doc_topic   = primary.metadata.get("topic", "")
+            prompt      = build_prompt(context, question, q_type, article_ref, doc_topic, voice=voice)
 
-        # STEP 7: generate with retry
-        answer = _llm_invoke_with_retry(prompt)
+            answer = _llm_invoke_with_retry(prompt)
+            answer = clean_answer(answer)
 
-        # STEP 8: clean
-        answer = clean_answer(answer)
+            if validate_answer_citations(answer, context):
+                winner = (primary, extra_docs, context, answer, q_type)
+                break
 
-        # STEP 8.1: reject the whole answer if it cites an article number
-        # that never appeared in the retrieved context — see
-        # validate_answer_citations() docstring above.
-        if not validate_answer_citations(answer, context):
+        if not winner:
             return (
-                "⚠️ Hệ thống phát hiện căn cứ pháp lý trong câu trả lời không khớp "
-                "với tài liệu truy xuất nên chưa thể trả lời chắc chắn. "
+                "⚠️ Hệ thống đã thử nhiều tài liệu liên quan nhưng vẫn không tìm được "
+                "câu trả lời có căn cứ pháp lý khớp với tài liệu truy xuất. "
                 "Vui lòng đặt lại câu hỏi cụ thể hơn."
             )
+
+        best_doc, extra_docs, context, answer, q_type = winner
 
         # STEP 8.2: splice in "Căn cứ pháp lý" — built the same way as the
         # citation footer below (best_doc/extra_docs metadata only), never
@@ -1421,3 +1498,9 @@ def ask_rag(question: str, return_debug: bool = False):
     except Exception as e:
         print("RAG ERROR:", e)
         return "❌ Lỗi hệ thống."
+
+
+# Runs once at import time, at the true bottom of the module so every name it
+# needs (_ENTITY_AGNOSTIC_DOC_TYPES, detect_entity_type) is already bound —
+# see the note next to the earlier startup-call block above.
+backfill_entity_type_tags()

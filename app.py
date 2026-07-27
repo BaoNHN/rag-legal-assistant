@@ -20,6 +20,7 @@ from database.database import (
     create_chat, get_all_chats,
     save_message, get_messages,
     rename_chat, delete_chat,
+    get_chat_title, NOTIFICATION_CHAT_TITLE, MAX_CHATS_PER_USER,
     get_all_users, set_user_status, delete_user,
     change_user_password,
 )
@@ -140,12 +141,18 @@ async def chatbot(request: Request):
         data       = await request.json()
         user_input = data.get("prompt")
         chat_id    = data.get("chat_id")
+        voice      = data.get("voice", "formal")
+        if voice not in ("formal", "casual"):
+            voice = "formal"
 
         if not user_input:
             return {"status": "error", "text": "⚠️ Bạn chưa nhập câu hỏi."}
 
+        if chat_id and get_chat_title(chat_id) == NOTIFICATION_CHAT_TITLE:
+            return {"status": "error", "text": f"⚠️ Không thể gửi tin nhắn trong đoạn chat '{NOTIFICATION_CHAT_TITLE}'."}
+
         save_message(chat_id, "user", user_input)
-        response = ask_rag(user_input)
+        response = ask_rag(user_input, voice=voice)
         save_message(chat_id, "assistant", response)
         return {"status": "success", "text": response}
     except Exception as e:
@@ -166,14 +173,30 @@ async def api_create_chat(request: Request):
     if not logged_in(request):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     owner_role = 1 if is_teacher(request) else 0
-    chat_id = create_chat(request.session["user_id"], owner_role)
+    user_id    = request.session["user_id"]
+
+    existing = [c for c in get_all_chats(user_id, owner_role) if c["title"] != NOTIFICATION_CHAT_TITLE]
+    if len(existing) >= MAX_CHATS_PER_USER:
+        return JSONResponse({
+            "status":  "error",
+            "message": f"Bạn đã đạt giới hạn {MAX_CHATS_PER_USER} đoạn chat. "
+                       f"Vui lòng xoá một đoạn chat cũ trước khi tạo mới.",
+            "chats":   existing,
+        }, status_code=409)
+
+    chat_id = create_chat(user_id, owner_role)
     return {"chat_id": chat_id}
 
 
 @app.post("/rename_chat")
 async def api_rename_chat(request: Request):
     data = await request.json()
-    rename_chat(data["chat_id"], data["title"])
+    ok = rename_chat(data["chat_id"], data["title"])
+    if not ok:
+        return JSONResponse({
+            "status":  "error",
+            "message": f"Không thể đặt tên chat trùng với '{NOTIFICATION_CHAT_TITLE}'.",
+        }, status_code=400)
     return {"status": "ok"}
 
 
@@ -527,6 +550,46 @@ async def download_eval_result_route(request: Request, filename: str):
 
     safe_name = os.path.basename(filename)
     if not re.match(r'^eval_results_.*\.xlsx$', safe_name):
+        return JSONResponse({"status": "error", "message": "Tên file không hợp lệ"}, status_code=400)
+
+    file_path = os.path.join(BASE_DIR, safe_name)
+    if not os.path.exists(file_path):
+        return JSONResponse({"status": "error", "message": "Không tìm thấy file kết quả"}, status_code=404)
+
+    return StreamingResponse(
+        open(file_path, "rb"),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={safe_name}"},
+    )
+
+
+@app.get("/download_low_score_result/{filename}")
+async def download_low_score_result_route(request: Request, filename: str):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    safe_name = os.path.basename(filename)
+    if not re.match(r'^eval_low_score_.*\.xlsx$', safe_name):
+        return JSONResponse({"status": "error", "message": "Tên file không hợp lệ"}, status_code=400)
+
+    file_path = os.path.join(BASE_DIR, safe_name)
+    if not os.path.exists(file_path):
+        return JSONResponse({"status": "error", "message": "Không tìm thấy file kết quả"}, status_code=404)
+
+    return StreamingResponse(
+        open(file_path, "rb"),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={safe_name}"},
+    )
+
+
+@app.get("/download_connection_errors/{filename}")
+async def download_connection_errors_route(request: Request, filename: str):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    safe_name = os.path.basename(filename)
+    if not re.match(r'^eval_connection_errors_.*\.xlsx$', safe_name):
         return JSONResponse({"status": "error", "message": "Tên file không hợp lệ"}, status_code=400)
 
     file_path = os.path.join(BASE_DIR, safe_name)

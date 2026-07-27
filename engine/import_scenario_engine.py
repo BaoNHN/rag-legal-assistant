@@ -172,6 +172,8 @@ def parse_scenario_docx(path: str) -> list:
 
 
 def _build_case_doc(case: dict, source_label: str, importer: str) -> Document:
+    from engine.rag_engine import detect_entity_type
+
     lines = [
         f"Tình huống pháp lý: {case['topic']}",
         f"Mô tả: {case['scenario']}",
@@ -195,21 +197,23 @@ def _build_case_doc(case: dict, source_label: str, importer: str) -> Document:
         lines.append("Câu hỏi tương đương: " + " | ".join(case["alternative_queries"]))
     content = "\n".join(lines)
 
-    return Document(
-        page_content=content,
-        metadata={
-            "case_id":            case["case_id"],
-            "topic":              case["topic"],
-            "difficulty":         case["difficulty"],
-            "doc_type":           "scenario_qa",
-            "import_source":      "scenario",
-            "nguon_thu_thap":     source_label,
-            "legal_basis":        "; ".join(case["legal_basis"]),
-            "retrieval_keywords": "; ".join(case["keywords"]),
-            "char_count":         len(content),
-            "importer":           importer,
-        },
-    )
+    meta = {
+        "case_id":            case["case_id"],
+        "topic":              case["topic"],
+        "difficulty":         case["difficulty"],
+        "doc_type":           "scenario_qa",
+        "import_source":      "scenario",
+        "nguon_thu_thap":     source_label,
+        "legal_basis":        "; ".join(case["legal_basis"]),
+        "retrieval_keywords": "; ".join(case["keywords"]),
+        "char_count":         len(content),
+        "importer":           importer,
+    }
+    entity_type = detect_entity_type(f"{case['topic']} {content}")
+    if entity_type:
+        meta["entity_type"] = entity_type
+
+    return Document(page_content=content, metadata=meta)
 
 
 # ── Main background job ───────────────────────────────────────────────────────

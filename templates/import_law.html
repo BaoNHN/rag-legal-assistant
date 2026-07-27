@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Import Law – RAG Legal Assistant</title>
+<title>Nhập văn bản luật – RAG Legal Assistant</title>
 <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 <style>
 :root {
@@ -371,6 +371,20 @@ main {
 }
 .btn-download-result:hover { background: rgba(13,180,162,0.25); }
 
+.btn-download-result.btn-low-score {
+  background: rgba(214,59,59,0.15);
+  border-color: rgba(214,59,59,0.35);
+  color: #FF8080;
+}
+.btn-download-result.btn-low-score:hover { background: rgba(214,59,59,0.25); }
+
+.btn-download-result.btn-conn-error {
+  background: rgba(138,151,168,0.15);
+  border-color: rgba(138,151,168,0.35);
+  color: var(--gray);
+}
+.btn-download-result.btn-conn-error:hover { background: rgba(138,151,168,0.25); }
+
 /* ── RIGHT PANEL ── */
 .example-panel { width: 460px; flex-shrink: 0; }
 .example-panel h3 { font-family: 'Crimson Pro', serif; font-size: 17px; font-weight: 600; color: var(--teal2); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
@@ -440,10 +454,10 @@ main {
     <!-- Tab Toggle -->
     <div class="tab-toggle">
       <button class="tab-btn active" id="tabPdf" onclick="switchTab('pdf')">
-        📄 Upload PDF / DOCX
+        📄 Tải lên PDF / DOCX
       </button>
       <button class="tab-btn" id="tabDataset" onclick="switchTab('dataset')">
-        📊 Import Dataset
+        📊 Nhập Dataset
       </button>
       <button class="tab-btn" id="tabScenario" onclick="switchTab('scenario')">
         📚 Tình huống
@@ -508,7 +522,7 @@ main {
 
     <!-- ══ PANEL: DATASET ══ -->
     <div class="panel" id="panelDataset">
-      <h1 class="panel-title">Import Dataset</h1>
+      <h1 class="panel-title">Nhập Dataset</h1>
       <p class="panel-subtitle">
         Tải lên file <span>.xlsx</span> theo cấu trúc mẫu để đưa tập dữ liệu vào ChromaDB
       </p>
@@ -556,8 +570,8 @@ main {
         <h3>📊 Đánh giá hệ thống RAG</h3>
         <p class="eval-desc">
           Chạy bộ đánh giá tự động so sánh câu trả lời AI với đáp án mẫu.<br/>
-          <strong>Quick</strong>: toàn bộ sheet Demo trong file đã chọn · chấm từ khóa (nhanh) &nbsp;|&nbsp;
-          <strong>Full</strong>: toàn bộ dataset trong file đã chọn · chấm LLM (chậm hơn, chính xác hơn)
+          <strong>Nhanh</strong>: toàn bộ sheet Demo trong file đã chọn · chấm từ khóa (nhanh) &nbsp;|&nbsp;
+          <strong>Đầy đủ</strong>: toàn bộ dataset trong file đã chọn · chấm LLM (chậm hơn, chính xác hơn)
         </p>
 
         <div class="eval-dataset-picker">
@@ -568,10 +582,10 @@ main {
 
         <div class="eval-btns">
           <button class="btn-eval btn-quick" id="btnQuick" onclick="startEval('quick')">
-            ⚡ Quick Evaluation
+            ⚡ Đánh giá Nhanh
           </button>
           <button class="btn-eval btn-full" id="btnFull" onclick="startEval('full')">
-            🔬 Full Evaluation
+            🔬 Đánh giá Đầy đủ
           </button>
         </div>
 
@@ -604,6 +618,8 @@ main {
           <div class="score-breakdown" id="scoreBreakdown"></div>
 
           <a class="btn-download-result" id="btnDownloadResult" href="#" download>⬇️ Tải sheet kết quả</a>
+          <a class="btn-download-result btn-low-score" id="btnDownloadLowScore" href="#" download style="display:none;"></a>
+          <a class="btn-download-result btn-conn-error" id="btnDownloadConnError" href="#" download style="display:none;"></a>
           <button class="btn-reset" onclick="resetEval()">↺ Reset đánh giá</button>
         </div>
       </div><!-- /eval-section -->
@@ -701,7 +717,7 @@ main {
 
       <div class="schema-card">
         <div class="schema-header">
-          🔬 Sheet <span class="sheet-badge">Dataset_150</span> / <span class="sheet-badge">Dataset_200</span> — dùng cho <strong>🔬 Full Evaluation</strong>
+          🔬 Sheet <span class="sheet-badge">Dataset_150</span> / <span class="sheet-badge">Dataset_200</span> — dùng cho <strong>🔬 Đánh giá Đầy đủ</strong>
         </div>
         <div class="schema-body">
           <div class="schema-field"><span class="sf-name">id</span><span class="sf-desc">Mã câu hỏi (VD: Q001)</span></div>
@@ -717,7 +733,7 @@ main {
 
       <div class="schema-card">
         <div class="schema-header">
-          ⚡ Sheet <span class="sheet-badge">Demo_*</span> (VD: Demo_30, Demo_50) — dùng cho <strong>⚡ Quick Evaluation</strong>
+          ⚡ Sheet <span class="sheet-badge">Demo_*</span> (VD: Demo_30, Demo_50) — dùng cho <strong>⚡ Đánh giá Nhanh</strong>
         </div>
         <div class="schema-body">
           <div class="schema-field"><span class="sf-name">(cùng cấu trúc)</span><span class="sf-desc">Giống sheet Dataset_* ở trên — tập câu hỏi rút gọn để đánh giá nhanh bằng chấm từ khóa (auto mode), không cần gọi Groq</span></div>
@@ -737,10 +753,10 @@ main {
       </div>
 
       <div class="template-note">
-        💡 <strong>Quick Evaluation</strong> gộp mọi sheet <span class="sheet-badge">Demo_*</span> — một tập câu hỏi rút gọn, chấm nhanh bằng từ khóa.
-        <strong>Full Evaluation</strong> gộp <em>toàn bộ</em> các sheet <span class="sheet-badge">Dataset_*</span> trong file — đây chính là bộ dữ liệu đầy đủ, không phải bản rút gọn — và chấm bằng Groq LLM theo rubric.<br/>
-        File mẫu minh hoạ đúng quy ước này: sheet <span class="sheet-badge">Demo_Quick_example</span> cho Quick,
-        sheet <span class="sheet-badge">Dataset_example</span> cho Full.<br/>
+        💡 <strong>Đánh giá Nhanh</strong> gộp mọi sheet <span class="sheet-badge">Demo_*</span> — một tập câu hỏi rút gọn, chấm nhanh bằng từ khóa.
+        <strong>Đánh giá Đầy đủ</strong> gộp <em>toàn bộ</em> các sheet <span class="sheet-badge">Dataset_*</span> trong file — đây chính là bộ dữ liệu đầy đủ, không phải bản rút gọn — và chấm bằng Groq LLM theo rubric.<br/>
+        File mẫu minh hoạ đúng quy ước này: sheet <span class="sheet-badge">Demo_Quick_example</span> cho Đánh giá Nhanh,
+        sheet <span class="sheet-badge">Dataset_example</span> cho Đánh giá Đầy đủ.<br/>
         <a href="/download_dataset_example" class="btn-example-download">⬇️ Tải example_sheet.xlsx</a><br/>
         Dùng làm template — thêm dữ liệu vào các sheet tương ứng (giữ đúng tiền tố Demo_ hoặc Dataset_) rồi upload lại.
       </div>
@@ -899,7 +915,7 @@ async function handlePdfSubmit() {
         document.getElementById('pdfBtnText').textContent   = '🚀 Tải lên & Xử lý AI';
       });
     } else {
-      throw new Error(data.message || 'Server error');
+      throw new Error(data.message || 'Lỗi máy chủ');
     }
   } catch (err) {
     const e = document.getElementById('pdfGlobalError');
@@ -987,7 +1003,7 @@ async function handleDsSubmit() {
         document.getElementById('dsBtnText').textContent   = '📥 Import vào ChromaDB';
       });
     } else {
-      throw new Error(data.message || 'Server error');
+      throw new Error(data.message || 'Lỗi máy chủ');
     }
   } catch (err) {
     errEl.textContent = '❌ Lỗi: ' + err.message; errEl.style.display = 'block';
@@ -1068,7 +1084,7 @@ async function handleScSubmit() {
         document.getElementById('scBtnText').textContent   = '📥 Tải lên & Xử lý';
       });
     } else {
-      throw new Error(data.message || 'Server error');
+      throw new Error(data.message || 'Lỗi máy chủ');
     }
   } catch (err) {
     errEl.textContent = '❌ Lỗi: ' + err.message; errEl.style.display = 'block';
@@ -1096,7 +1112,7 @@ async function startEval(type) {
   }
   if (type === 'quick' && (!entry || !entry.demo_sheets || !entry.demo_sheets.length)) {
     document.getElementById('evalMsg').textContent =
-      `⚠️ File '${datasetFile}' không có sheet Demo — không thể chạy Quick Evaluation cho file này.`;
+      `⚠️ File '${datasetFile}' không có sheet Demo — không thể chạy Đánh giá Nhanh cho file này.`;
     return;
   }
 
@@ -1107,8 +1123,8 @@ async function startEval(type) {
   document.getElementById('evalProgBar').style.width    = '0%';
   document.getElementById('evalProgPct').textContent    = '0%';
   document.getElementById('evalProgLabel').textContent  = type === 'quick'
-    ? `⚡ Quick Evaluation (${datasetFile} · auto mode)…`
-    : `🔬 Full Evaluation (${datasetFile} · LLM mode)…`;
+    ? `⚡ Đánh giá Nhanh (${datasetFile} · auto mode)…`
+    : `🔬 Đánh giá Đầy đủ (${datasetFile} · LLM mode)…`;
   document.getElementById('evalMsg').textContent = 'Đang khởi động…';
 
   try {
@@ -1118,7 +1134,7 @@ async function startEval(type) {
       body:    JSON.stringify({ mode, split, dataset_file: datasetFile })
     });
     const data = await res.json();
-    if (data.status !== 'ok') throw new Error(data.message || 'Server error');
+    if (data.status !== 'ok') throw new Error(data.message || 'Lỗi máy chủ');
     pollEval(data.job_id);
   } catch (err) {
     document.getElementById('evalMsg').textContent = '❌ Lỗi: ' + err.message;
@@ -1157,10 +1173,14 @@ function pollEval(jobId) {
 }
 
 function renderScores(sc) {
-  // Total score
+  // Total score — total_questions already excludes connection-error rows
+  // (those never counted toward avg_total in the first place).
   document.getElementById('scoreTotalNum').textContent = sc.avg_total;
-  document.getElementById('scoreLabel').textContent    =
-    `${sc.total_questions} câu · ${sc.mode === 'llm' ? 'LLM mode' : 'Auto mode'}`;
+  let label = `${sc.total_questions} câu · ${sc.mode === 'llm' ? 'LLM mode' : 'Auto mode'}`;
+  if (sc.connection_error_count > 0) {
+    label += ` · ${sc.connection_error_count} câu lỗi kết nối (không tính điểm)`;
+  }
+  document.getElementById('scoreLabel').textContent = label;
 
   document.getElementById('scoreMeta').innerHTML =
     `Sheets: ${(sc.sheets_used || []).join(', ')}`;
@@ -1171,6 +1191,24 @@ function renderScores(sc) {
     dlBtn.style.display = 'flex';
   } else {
     dlBtn.style.display = 'none';
+  }
+
+  const dlLowBtn = document.getElementById('btnDownloadLowScore');
+  if (sc.low_score_file && sc.low_score_count > 0) {
+    dlLowBtn.href = '/download_low_score_result/' + encodeURIComponent(sc.low_score_file);
+    dlLowBtn.textContent = `⬇️ Tải ${sc.low_score_count} câu điểm thấp (cần soát)`;
+    dlLowBtn.style.display = 'flex';
+  } else {
+    dlLowBtn.style.display = 'none';
+  }
+
+  const dlConnErrBtn = document.getElementById('btnDownloadConnError');
+  if (sc.connection_error_file && sc.connection_error_count > 0) {
+    dlConnErrBtn.href = '/download_connection_errors/' + encodeURIComponent(sc.connection_error_file);
+    dlConnErrBtn.textContent = `⬇️ Tải ${sc.connection_error_count} câu lỗi kết nối (không tính điểm)`;
+    dlConnErrBtn.style.display = 'flex';
+  } else {
+    dlConnErrBtn.style.display = 'none';
   }
 
   // Per-metric bars
@@ -1285,10 +1323,10 @@ function updateDatasetHint() {
   const parts = [];
   parts.push(hasDemo
     ? `Demo: ${entry.demo_sheets.join(', ')}`
-    : '⚠️ File này không có sheet Demo — không thể chạy Quick Evaluation');
+    : '⚠️ File này không có sheet Demo — không thể chạy Đánh giá Nhanh');
   parts.push(entry.dataset_sheets && entry.dataset_sheets.length
     ? `Dataset: ${entry.dataset_sheets.join(', ')}`
-    : '⚠️ File này không có sheet Dataset — không thể chạy Full Evaluation');
+    : '⚠️ File này không có sheet Dataset — không thể chạy Đánh giá Đầy đủ');
   hint.textContent = parts.join(' · ');
 
   btnQuick.disabled = !hasDemo;

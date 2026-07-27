@@ -140,6 +140,41 @@ def _extract_law_numbers(article_ref: str) -> list:
     return re.findall(r'\d+/\d{4}/[A-ZĐ][A-ZĐ.\-]*', article_ref, flags=re.IGNORECASE)
 
 
+_GRADING_INSTRUCTION_RE = re.compile(r'\s*Câu trả lời cần nêu[^.]*\.\s*$')
+
+
+def _strip_grading_instructions(expected: str) -> str:
+    """The Dataset_*/Demo_* expected_answer_vi column sometimes has a
+    grading-instruction sentence appended directly onto the real answer text
+    (e.g. "...nếu được chấp thuận. Câu trả lời cần nêu đúng căn cứ Điều 18 và
+    không mở rộng sang lĩnh vực pháp luật khác nếu câu hỏi không yêu cầu.") —
+    a note to whoever grades by hand, not part of the answer itself. Fed
+    verbatim to the LLM judge as "Câu trả lời mẫu", that trailing sentence
+    confuses it into marking the AI's answer as missing something (2026-07-27
+    eval review: 32/103 knowledge_rule questions with >50% word-overlap to
+    the real answer content still scored legal_accuracy<=1). Stripped once
+    here so both scorers only ever see the actual legal content."""
+    return _GRADING_INSTRUCTION_RE.sub('', expected).strip()
+
+
+def _citation_grounded(generated: str, article_ref: str) -> bool:
+    """Deterministic check: does `generated` actually name the article_ref's
+    required "Điều N" (or, when article_ref has no Điều number, the law/decree
+    number)? Same matching _auto_score()'s citation_correct axis uses —
+    reused in _llm_score() as a floor on the judge's own citation_correct,
+    because an 8B judge model doesn't reliably apply the "≥2 if the required
+    article is present" instruction it's given on every question, even
+    though the underlying answer is correct every time: 2026-07-27 eval
+    review found 14/197 rows that DID cite the right article still scored
+    citation_correct=0 from the judge alone."""
+    gen_lower = generated.lower()
+    art_nums = _extract_article_numbers(article_ref)
+    if art_nums:
+        return any(re.search(rf'điều\s+{re.escape(n)}\b', gen_lower) for n in art_nums)
+    law_nums = _extract_law_numbers(article_ref)
+    return any(n.lower() in gen_lower for n in law_nums) if law_nums else False
+
+
 def _auto_score(question: str, generated: str, expected: str,
                 article_ref: str, keywords: str, retrieved_context: str,
                 expected_retrieved_context: str = "") -> dict:
@@ -227,9 +262,39 @@ def _auto_score(question: str, generated: str, expected: str,
     return scores
 
 
+def _extract_retry_after(e: Exception) -> float | None:
+    """Pull the server-suggested wait time out of a rate-limit error instead
+    of guessing. Groq's 429s carry a `retry-after` response header, and the
+    error body also spells it out in prose ("Please try again in 4.348s") —
+    either one is a more accurate wait than our fixed backoff schedule, which
+    is just a blind guess at how long the rate-limit window is. Only falls
+    back to the fixed schedule (in the caller) when neither is present."""
+    response = getattr(e, "response", None)
+    if response is not None:
+        header = getattr(response, "headers", {}).get("retry-after")
+        if header:
+            try:
+                return float(header)
+            except ValueError:
+                pass
+    match = re.search(r"try again in (\d+(?:\.\d+)?)s", str(e), re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    return None
+
+
 # ── LLM scorer (Groq) ─────────────────────────────────────────────────────────
 def _llm_score(question: str, generated: str, expected: str,
                article_ref: str, groq_key: str) -> dict:
+    """LLM-judge scoring. On total judge failure (Groq unreachable / response
+    never parses to JSON after every retry) returns {"connection_error": True}
+    instead of a score — this is an external connectivity/API failure, not a
+    defect in the RAG answer, so callers must exclude the question from
+    scoring entirely (own sheet, not counted in the average) rather than
+    substitute any score for it. A hard 0 across all 5 rubric axes previously
+    corrupted the average this way: a 2026-07-26 full-eval run zeroed 8/200
+    questions, several of which had answers matching the expected answer
+    almost verbatim — the RAG system wasn't at fault, the judge call was."""
     from langchain_groq import ChatGroq
     llm = ChatGroq(api_key=groq_key, model="llama-3.1-8b-instant", temperature=0)
 
@@ -244,7 +309,11 @@ Câu trả lời mẫu:
 
 Hãy chấm điểm từ 0-3 cho mỗi tiêu chí sau và trả về JSON:
 - legal_accuracy: Độ chính xác pháp lý (0=sai, 1=thiếu, 2=cơ bản đúng, 3=đúng đầy đủ)
-- citation_correct: Trích dẫn điều luật (0=không có/sai, 1=mơ hồ, 2=đúng chính, 3=đúng đầy đủ)
+- citation_correct: Trích dẫn điều luật (0=không có/sai, 1=mơ hồ, 2=đúng chính, 3=đúng đầy đủ).
+  QUAN TRỌNG: nếu câu trả lời của AI có trích đúng "Điều luật cần trích dẫn" ở trên (dù ở phần Kết
+  luận hay Căn cứ pháp lý), hãy chấm citation_correct TỐI THIỂU 2 điểm — kể cả khi câu trả lời còn
+  liệt kê thêm các Điều luật liên quan khác trong phần Căn cứ pháp lý. CHỈ chấm dưới 2 khi Điều luật
+  cần trích dẫn bị thiếu hoàn toàn hoặc bị trích sai số.
 - retrieval_relevance: Nội dung dựa vào đúng điều luật (0-3)
 - hallucination: Không bịa đặt (0=bịa nhiều, 1=có bịa, 2=ít bịa, 3=không bịa)
 - clarity: Rõ ràng, dễ hiểu (0-3)
@@ -256,37 +325,117 @@ Chỉ trả về JSON, không giải thích. Ví dụ:
     wait_times = [15, 30, 60, 90, 120]
     for attempt in range(len(wait_times) + 1):
         try:
-            response   = llm.invoke(prompt).content.strip()
-            json_match = re.search(r'\{[^}]+\}', response)
+            response = llm.invoke(prompt).content.strip()
+            # Anchor on "legal_accuracy" actually appearing inside the
+            # matched span — a bare `\{[^}]+\}` can grab an unrelated
+            # brace-delimited fragment from stray text around the model's
+            # real answer. That fragment still parses as valid JSON, so no
+            # exception fires, but sc.get(k, 0) then silently defaults every
+            # rubric key to 0 — a false "0/0/0/0/0" that's indistinguishable
+            # from a genuinely bad answer (2026-07-27 eval review: ELK027, an
+            # answer that near-verbatim matched the expected text, scored
+            # all-zero this way). Requiring every RUBRIC key be present
+            # (checked below) rejects that fragment and retries instead.
+            json_match = re.search(r'\{[^{}]*"legal_accuracy"[^{}]*\}', response)
             if json_match:
                 sc = json.loads(json_match.group())
+                if not all(k in sc for k in RUBRIC):
+                    raise ValueError(f"judge JSON missing rubric keys: {sc}")
+                # A real judge essentially never has grounds to score clarity
+                # 0 on coherent, well-formed Vietnamese prose regardless of
+                # whether the legal content is right or wrong — clarity is
+                # about readability, not correctness. Every rubric axis
+                # landing on exactly 0 at once (including clarity) is the
+                # signature of the matched-fragment failure above slipping
+                # through with a technically-valid-but-wrong JSON object
+                # (ELU177/ELU184, 2026-07-27 review), not a real per-criterion
+                # verdict — treat it as a bad response and retry.
+                if all(sc.get(k, 0) == 0 for k in RUBRIC):
+                    raise ValueError(f"judge returned all-zero scores, treating as invalid: {sc}")
+                # Deterministic floor — don't trust the judge's
+                # citation_correct blindly when the answer demonstrably cites
+                # the right article (see _citation_grounded docstring).
+                if _citation_grounded(generated, article_ref):
+                    sc["citation_correct"] = max(sc.get("citation_correct", 0), 2)
                 sc["total"] = round(
                     sum((sc.get(k, 0) / 3.0) * RUBRIC[k] * 100 for k in RUBRIC), 1
                 )
                 return sc
         except Exception as e:
             if attempt < len(wait_times):
-                wait = wait_times[attempt]
-                print(f"  [429] Rate limit - retry {attempt + 1}/{len(wait_times)} after {wait}s...")
+                server_wait = _extract_retry_after(e)
+                if server_wait is not None:
+                    wait = server_wait
+                    print(f"  [429] Rate limit - retry {attempt + 1}/{len(wait_times)} "
+                          f"after {wait}s (server-reported)...")
+                else:
+                    wait = wait_times[attempt]
+                    print(f"  [429] Rate limit - retry {attempt + 1}/{len(wait_times)} after {wait}s...")
                 time.sleep(wait)
             else:
                 print(f"  [FAIL] LLM scoring failed after all retries: {e}")
-    return {k: 0 for k in RUBRIC} | {"total": 0.0}
+
+    # Groq unreachable, or its response never parsed to valid JSON, on every
+    # retry — an external failure, not a scoreable answer.
+    return {"connection_error": True}
 
 
 def _prune_old_eval_files(keep: int = KEEP_LATEST_EVAL_FILES):
-    """Keep only the `keep` most recently modified eval_results_*.xlsx files
-    in BASE_DIR — older ones are just disk clutter with no UI to browse them."""
+    """Keep only the `keep` most recently modified eval_results_*.xlsx runs.
+
+    eval_low_score_*.xlsx / eval_connection_errors_*.xlsx are auxiliary sheets
+    tied to one specific run — they share the same "<stem>_<split>_<mode>_<ts>"
+    suffix as their eval_results_ file. They are NOT pruned by their own
+    mtime ranking (that would let one survive independently of, or get
+    deleted ahead of, the eval_results_ run it belongs to) — instead each one
+    is deleted the moment its parent eval_results_ file ages out of the kept
+    set, and never lingers as an orphan sheet with no matching run."""
     files = [
         f for f in os.listdir(BASE_DIR)
         if f.startswith("eval_results_") and f.lower().endswith(".xlsx")
     ]
     files.sort(key=lambda f: os.path.getmtime(os.path.join(BASE_DIR, f)), reverse=True)
+
+    kept_suffixes = {f[len("eval_results_"):] for f in files[:keep]}
     for f in files[keep:]:
         try:
             os.remove(os.path.join(BASE_DIR, f))
         except Exception:
             pass
+
+    for prefix in ("eval_low_score_", "eval_connection_errors_"):
+        for f in os.listdir(BASE_DIR):
+            if not (f.startswith(prefix) and f.lower().endswith(".xlsx")):
+                continue
+            if f[len(prefix):] not in kept_suffixes:
+                try:
+                    os.remove(os.path.join(BASE_DIR, f))
+                except Exception:
+                    pass
+
+
+# ── Low-score sheet export ────────────────────────────────────────────────────
+# Score columns from RUBRIC, each on a 0-3 scale — a row is "lỗi" (needs a
+# quick manual check) when ANY criterion scored 0 or 1 (< 2), per the
+# threshold requested for the fast-review sheet.
+_SCORE_COLS = [f"score_{k}" for k in RUBRIC]
+
+
+def _low_score_mask(df_res: "pd.DataFrame"):
+    return df_res[_SCORE_COLS].min(axis=1) < 2
+
+
+def _export_low_score_sheet(df_res: "pd.DataFrame", out_dir: str, dataset_stem: str,
+                            split: str, mode: str, ts: str) -> str | None:
+    """Writes a filtered sheet of every question with at least one rubric
+    criterion scored 0 or 1, so a low overall run can be triaged without
+    re-reading all 200 rows. Returns the filename, or None if nothing qualifies."""
+    low_df = df_res[_low_score_mask(df_res)]
+    if low_df.empty:
+        return None
+    out_path = os.path.join(out_dir, f"eval_low_score_{dataset_stem}_{split}_{mode}_{ts}.xlsx")
+    low_df.to_excel(out_path, index=False)
+    return os.path.basename(out_path)
 
 
 def _save_latest_result(summary_payload: dict):
@@ -424,14 +573,15 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
 
         from engine.rag_engine import ask_rag
 
-        results      = []
-        score_totals = {k: [] for k in RUBRIC}
-        totals       = []
+        results             = []
+        connection_error_rows = []
+        score_totals        = {k: [] for k in RUBRIC}
+        totals               = []
 
         for idx, (_, row) in enumerate(df.iterrows()):
             q_id       = str(row.get('id', f'Q{idx}')).strip()
             question   = str(row.get('question_vi', '')).strip()
-            expected   = str(row.get('expected_answer_vi', '')).strip()
+            expected   = _strip_grading_instructions(str(row.get('expected_answer_vi', '')).strip())
             art_ref    = str(row.get('article_reference', '')).strip()
             keywords   = str(row.get('retrieval_keywords', '')).strip()
             q_type     = str(row.get('question_type', '')).strip()
@@ -464,6 +614,21 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
                 time.sleep(3)   # ~20 req/min → stay under Groq free-tier limit
             else:
                 sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
+
+            if sc.get("connection_error"):
+                # Groq unreachable for this question after every retry — an
+                # external failure, not a defect in the RAG answer. Excluded
+                # entirely from scoring/averages; goes in its own sheet instead.
+                connection_error_rows.append({
+                    "id":            q_id,
+                    "question_type": q_type,
+                    "difficulty":    difficulty,
+                    "question":      question,
+                    "generated":     generated,
+                    "expected":      expected,
+                    "article_ref":   art_ref,
+                })
+                continue
 
             for k in RUBRIC:
                 score_totals[k].append(sc.get(k, 0))
@@ -501,12 +666,28 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
         dataset_stem = os.path.splitext(dataset_label)[0]
         out_path     = os.path.join(BASE_DIR, f"eval_results_{dataset_stem}_{split}_{mode}_{ts}.xlsx")
         df_res.to_excel(out_path, index=False)
+
+        low_score_file  = _export_low_score_sheet(df_res, BASE_DIR, dataset_stem, split, mode, ts)
+        low_score_count = 0 if not low_score_file else int(_low_score_mask(df_res).sum())
+
+        conn_err_file = None
+        if connection_error_rows:
+            conn_err_file = os.path.join(
+                BASE_DIR, f"eval_connection_errors_{dataset_stem}_{split}_{mode}_{ts}.xlsx"
+            )
+            pd.DataFrame(connection_error_rows).to_excel(conn_err_file, index=False)
+            conn_err_file = os.path.basename(conn_err_file)
+
         _prune_old_eval_files()
 
         summary_payload = {
-            "total_questions": len(results),
-            "avg_total":       avg_total,
-            "avg_scores":      avg_scores,
+            "total_questions":      len(results),
+            "avg_total":            avg_total,
+            "avg_scores":           avg_scores,
+            "low_score_file":       low_score_file,
+            "low_score_count":      low_score_count,
+            "connection_error_file":  conn_err_file,
+            "connection_error_count": len(connection_error_rows),
             "rubric_labels":   RUBRIC_LABELS,
             "rubric_weights":  RUBRIC,
             "by_type":         by_type,
@@ -519,9 +700,13 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
         }
         _save_latest_result(summary_payload)
 
+        done_msg = f"✅ Đánh giá hoàn tất! Điểm tổng: {avg_total}/100"
+        if connection_error_rows:
+            done_msg += f" (đã loại {len(connection_error_rows)} câu bị lỗi kết nối khỏi điểm tổng)"
+
         _set(job_id,
              status="done",
-             message=f"✅ Đánh giá hoàn tất! Điểm tổng: {avg_total}/100",
+             message=done_msg,
              progress=100,
              scores=summary_payload)
 
@@ -583,16 +768,17 @@ def _run_cli(mode: str, split: str):
 
     from engine.rag_engine import ask_rag
 
-    results      = []
-    score_totals = {k: [] for k in RUBRIC}
-    totals       = []
+    results               = []
+    connection_error_rows = []
+    score_totals          = {k: [] for k in RUBRIC}
+    totals                = []
 
     with tqdm(total=n, ncols=90, unit="q") as pbar:
 
         for idx, (_, row) in enumerate(df.iterrows()):
             q_id       = str(row.get("id",            f"Q{idx}")).strip()
             question   = str(row.get("question_vi",   "")).strip()
-            expected   = str(row.get("expected_answer_vi", "")).strip()
+            expected   = _strip_grading_instructions(str(row.get("expected_answer_vi", "")).strip())
             art_ref    = str(row.get("article_reference",  "")).strip()
             keywords   = str(row.get("retrieval_keywords", "")).strip()
             q_type     = str(row.get("question_type", "")).strip()
@@ -626,6 +812,20 @@ def _run_cli(mode: str, split: str):
             else:
                 sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
 
+            if sc.get("connection_error"):
+                connection_error_rows.append({
+                    "id":            q_id,
+                    "question_type": q_type,
+                    "difficulty":    difficulty,
+                    "question":      question,
+                    "generated":     generated,
+                    "expected":      expected,
+                    "article_ref":   art_ref,
+                })
+                pbar.set_description(f"[{q_id}] connection error - skipped")
+                pbar.update(1)
+                continue
+
             for k in RUBRIC:
                 score_totals[k].append(sc.get(k, 0))
             totals.append(sc["total"])
@@ -642,7 +842,7 @@ def _run_cli(mode: str, split: str):
                 "score_total":   sc["total"],
             })
 
-            running_avg = sum(totals) / len(totals)
+            running_avg = sum(totals) / max(len(totals), 1)
             pbar.set_description(f"[{q_id}]")
             pbar.set_postfix(score=f"{running_avg:.1f}/100", last=f"{sc['total']:.0f}")
             pbar.update(1)
@@ -664,6 +864,10 @@ def _run_cli(mode: str, split: str):
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = os.path.join(BASE_DIR, f"eval_results_{split}_{mode}_{ts}.xlsx")
     df_res.to_excel(out_path, index=False)
+
+    if connection_error_rows:
+        conn_err_path = os.path.join(BASE_DIR, f"eval_connection_errors_{split}_{mode}_{ts}.xlsx")
+        pd.DataFrame(connection_error_rows).to_excel(conn_err_path, index=False)
 
     W = 55
     print(f"\n{'='*W}")
@@ -689,6 +893,8 @@ def _run_cli(mode: str, split: str):
             print(f"    {d:<10} {'|'*fill} {v}/100")
 
     print(f"\n  Ket qua : {os.path.basename(out_path)}")
+    if connection_error_rows:
+        print(f"  Loi ket noi (loai khoi diem): {len(connection_error_rows)} cau -> {os.path.basename(conn_err_path)}")
     print(f"{'='*W}\n")
 
 

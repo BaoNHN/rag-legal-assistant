@@ -8,6 +8,37 @@ const mainContainer = document.getElementById("mainContainer");
 let currentChatId = null;
 let chats = {};  // { chatId: [{role:'user', text:'hi'}, ...] }
 
+// Reserved title for the auto-created import-law status chat — must match
+// database.database.NOTIFICATION_CHAT_TITLE. Chats with this exact title
+// are read-only (no sending) and excluded from the 5-chat cap.
+const NOTIFICATION_CHAT_TITLE = "Thông báo";
+
+// ── Response voice/tone toggle (formal = nghiêm túc, casual = đời thường) ──
+// Per-browser preference (localStorage), default "formal" — matches the
+// system's existing strict legal-writing style unless the user opts out.
+let currentVoice = localStorage.getItem("voice") || "formal";
+
+function updateVoiceButton() {
+    const btn = document.getElementById("voiceToggle");
+    if (!btn) return;
+    btn.textContent = currentVoice === "casual" ? "😊 Đời thường" : "🎓 Nghiêm túc";
+}
+
+function toggleVoice() {
+    currentVoice = currentVoice === "casual" ? "formal" : "casual";
+    localStorage.setItem("voice", currentVoice);
+    updateVoiceButton();
+}
+
+// ── Lock/unlock the input bar (used for the read-only "Thông báo" chat) ──
+function setInputLocked(locked) {
+    chatInput.disabled = locked;
+    sendButton.disabled = locked;
+    chatInput.placeholder = locked
+        ? `Đoạn chat '${NOTIFICATION_CHAT_TITLE}' chỉ để xem, không thể gửi tin nhắn.`
+        : "Nhập câu hỏi về Luật Doanh nghiệp…";
+}
+
 // ── Welcome / Chat mode toggle ────────────────────
 function enterChatMode() {
     mainContainer.classList.add("is-chatting");
@@ -30,6 +61,9 @@ async function loadChatFromDB(chatId) {
     currentChatId = chatId;
     clearChatbox();
     enterChatMode();
+
+    const chatElem = document.querySelector(`.chat-item[data-id="${chatId}"]`);
+    setInputLocked(chatElem?.dataset.title === NOTIFICATION_CHAT_TITLE);
 
     const messages = await fetch(`/get_chat_messages?chat_id=${chatId}`)
         .then(r => r.json());
@@ -116,7 +150,7 @@ async function displayMessage(message, isUser) {
 }
 
 async function callApi(prompt) {
-    chatInput.value = "Typing...";
+    chatInput.value = "Đang gửi…";
     chatInput.disabled = true;
     sendButton.disabled = true;
 
@@ -126,7 +160,8 @@ async function callApi(prompt) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 prompt: prompt,
-                chat_id: currentChatId
+                chat_id: currentChatId,
+                voice: currentVoice
             })
         });
 
@@ -169,6 +204,10 @@ sendButton.addEventListener('click', async () => {
         // 1️⃣ Ensure chat exists
         if (!currentChatId) {
             await createNewChat();
+            // createNewChat() bails out (leaving currentChatId unset) when the
+            // 5-chat cap is hit and shows a picker instead — stop here so the
+            // message isn't sent against a nonexistent chat.
+            if (!currentChatId) return;
         }
 
         // 2️⃣ Ensure memory exists (🔥 FIX crash)
@@ -184,11 +223,10 @@ sendButton.addEventListener('click', async () => {
         if (chatElem) {
             const titleElem = chatElem.querySelector(".chat-title");
 
-            if (titleElem && titleElem.innerText === "New Chat") {
+            if (titleElem && titleElem.innerText === "Đoạn chat mới") {
                 const newName = message.slice(0, 20);
-                titleElem.innerText = newName;
 
-                await fetch("/rename_chat", {
+                const renameRes  = await fetch("/rename_chat", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -196,6 +234,11 @@ sendButton.addEventListener('click', async () => {
                         title: newName
                     })
                 });
+                const renameData = await renameRes.json();
+
+                if (renameData.status !== "error") {
+                    renameChat(currentChatId, newName);
+                }
             }
         }
 
@@ -242,14 +285,58 @@ async function createNewChat() {
 
     const data = await res.json();
 
+    if (res.status === 409) {
+        showChatLimitPicker(data.message, data.chats || []);
+        return;
+    }
+
     currentChatId = data.chat_id;
 
     chats[currentChatId] = [];
 
-    createChatItem(currentChatId, "New Chat");
+    createChatItem(currentChatId, "Đoạn chat mới");
 
     clearChatbox();
     enterWelcomeMode();
+}
+
+// ── Chat-limit picker: shown when /create_chat returns 409 (5-chat cap hit).
+// Lets the user delete an old chat right from the modal, then retries.
+function showChatLimitPicker(message, chatsToPick) {
+    const overlay = document.createElement("div");
+    overlay.className = "chat-modal-overlay";
+
+    const rows = chatsToPick.map(c => `
+        <div class="chat-modal-row" data-id="${c.id}">
+            <span title="${c.title}">${c.title}</span>
+            <button class="chat-modal-delete">Xoá</button>
+        </div>
+    `).join("");
+
+    overlay.innerHTML = `
+        <div class="chat-modal">
+            <h3>Đã đạt giới hạn đoạn chat</h3>
+            <p>${message || "Vui lòng xoá một đoạn chat cũ trước khi tạo mới."}</p>
+            ${rows}
+            <button class="chat-modal-close">Đóng</button>
+        </div>
+    `;
+
+    overlay.querySelectorAll(".chat-modal-delete").forEach(btn => {
+        btn.addEventListener("click", async () => {
+            const row = btn.closest(".chat-modal-row");
+            await deleteChat(row.dataset.id);
+            overlay.remove();
+            createNewChat();
+        });
+    });
+
+    overlay.querySelector(".chat-modal-close").addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) overlay.remove();
+    });
+
+    document.body.appendChild(overlay);
 }
 
 function clearChatbox() {
@@ -267,13 +354,17 @@ async function loadSidebarChats() {
     });
 }
 
-window.onload = loadSidebarChats;
+window.onload = () => {
+    loadSidebarChats();
+    updateVoiceButton();
+};
 
 // change title chat name
 function renameChat(chatId, newName) {
     const items = document.querySelectorAll(".chat-item");
     items.forEach(i => {
         if (i.dataset.id === chatId) {
+            i.dataset.title = newName;
             const titleElem = i.querySelector(".chat-title");
             titleElem.innerText = newName;
             titleElem.title = newName;
@@ -285,6 +376,7 @@ function createChatItem(chatId, title) {
     const item = document.createElement("div");
     item.className = "chat-item";
     item.dataset.id = chatId;
+    item.dataset.title = title;
 
     item.innerHTML = `
         <span class="chat-title" title="${title}">${title}</span>
@@ -308,8 +400,8 @@ function openChatMenu(chatId, chatItem) {
     const menu = document.createElement("div");
     menu.className = "chat-menu";
     menu.innerHTML = `
-        <div class="menu-item rename-item">Rename</div>
-        <div class="menu-item delete-item">Delete</div>
+        <div class="menu-item rename-item">Đổi tên</div>
+        <div class="menu-item delete-item">Xoá</div>
     `;
 
     // Position menu next to the chat item
@@ -317,13 +409,10 @@ function openChatMenu(chatId, chatItem) {
 
     // Rename
 menu.querySelector(".rename-item").addEventListener("click", async () => {
-    const newName = prompt("Enter new chat name:");
+    const newName = prompt("Nhập tên chat mới:");
     if (newName && newName.trim() !== "") {
 
-        renameChat(chatId, newName.trim());
-
-        // 🔥 update DB
-        await fetch("/rename_chat", {
+        const res  = await fetch("/rename_chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -331,6 +420,13 @@ menu.querySelector(".rename-item").addEventListener("click", async () => {
                 title: newName.trim()
             })
         });
+        const data = await res.json();
+
+        if (data.status === "error") {
+            alert(data.message || "Không thể đổi tên đoạn chat này.");
+        } else {
+            renameChat(chatId, newName.trim());
+        }
     }
     menu.remove();
 });
@@ -368,6 +464,7 @@ async function deleteChat(chatId) {
     if (currentChatId === chatId) {
         clearChatbox();
         currentChatId = null;
+        setInputLocked(false);
     }
 }
 
