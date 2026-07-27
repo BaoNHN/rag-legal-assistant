@@ -571,7 +571,7 @@ main {
         <p class="eval-desc">
           Chạy bộ đánh giá tự động so sánh câu trả lời AI với đáp án mẫu.<br/>
           <strong>Nhanh</strong>: toàn bộ sheet Demo trong file đã chọn · chấm từ khóa (nhanh) &nbsp;|&nbsp;
-          <strong>Đầy đủ</strong>: toàn bộ dataset trong file đã chọn · chấm LLM (chậm hơn, chính xác hơn)
+          <strong>Đầy đủ</strong>: lấy mẫu ngẫu nhiên tối đa 100 câu từ dataset trong file đã chọn · chấm LLM (chậm hơn, chính xác hơn)
         </p>
 
         <div class="eval-dataset-picker">
@@ -754,7 +754,7 @@ main {
 
       <div class="template-note">
         💡 <strong>Đánh giá Nhanh</strong> gộp mọi sheet <span class="sheet-badge">Demo_*</span> — một tập câu hỏi rút gọn, chấm nhanh bằng từ khóa.
-        <strong>Đánh giá Đầy đủ</strong> gộp <em>toàn bộ</em> các sheet <span class="sheet-badge">Dataset_*</span> trong file — đây chính là bộ dữ liệu đầy đủ, không phải bản rút gọn — và chấm bằng Groq LLM theo rubric.<br/>
+        <strong>Đánh giá Đầy đủ</strong> gộp toàn bộ các sheet <span class="sheet-badge">Dataset_*</span> trong file, rồi lấy mẫu ngẫu nhiên tối đa <strong>100 câu</strong> từ tập đã gộp (nếu file có nhiều hơn 100 câu) để chấm bằng Groq LLM theo rubric — mỗi câu tốn 2 lượt gọi Groq (RAG + giám khảo), test hết 200 câu sẽ gấp đôi token/thời gian so với 100.<br/>
         File mẫu minh hoạ đúng quy ước này: sheet <span class="sheet-badge">Demo_Quick_example</span> cho Đánh giá Nhanh,
         sheet <span class="sheet-badge">Dataset_example</span> cho Đánh giá Đầy đủ.<br/>
         <a href="/download_dataset_example" class="btn-example-download">⬇️ Tải example_sheet.xlsx</a><br/>
@@ -1144,8 +1144,11 @@ async function startEval(type) {
 }
 
 function pollEval(jobId) {
-  clearInterval(evalPollTimer);
-  evalPollTimer = setInterval(async () => {
+  clearTimeout(evalPollTimer);
+  const DEFAULT_POLL_MS = 2500;
+
+  async function tick() {
+    let nextDelayMs = DEFAULT_POLL_MS;
     try {
       const res = await fetch('/evaluate_status/' + jobId);
       const job = await res.json();
@@ -1156,20 +1159,31 @@ function pollEval(jobId) {
       if (job.message) document.getElementById('evalMsg').textContent = job.message;
 
       if (job.status === 'done') {
-        clearInterval(evalPollTimer);
         document.getElementById('evalProgress').style.display = 'none';
         document.getElementById('btnFull').disabled = false;
         updateDatasetHint(); // re-applies btnQuick disabled state for the selected file
         document.getElementById('scoreLatestNote').style.display = 'none';
         if (job.scores) renderScores(job.scores);
+        return; // done — stop polling
       } else if (job.status === 'failed') {
-        clearInterval(evalPollTimer);
         document.getElementById('evalMsg').textContent = job.message || '❌ Đánh giá thất bại';
         document.getElementById('btnFull').disabled     = false;
         updateDatasetHint();
+        return; // failed — stop polling
       }
-    } catch (e) { /* keep polling */ }
-  }, 2500);
+
+      // Backend reports how many seconds are left on a known Groq rate-limit
+      // wait (see evaluate_engine.get_eval_job) — space polls out to match it
+      // instead of hitting /evaluate_status every 2.5s while it's asleep for
+      // up to a few minutes. Falls back to the default cadence otherwise.
+      if (job.next_poll_in) {
+        nextDelayMs = Math.max(DEFAULT_POLL_MS, job.next_poll_in * 1000);
+      }
+    } catch (e) { /* keep polling at default cadence */ }
+    evalPollTimer = setTimeout(tick, nextDelayMs);
+  }
+
+  tick();
 }
 
 function renderScores(sc) {

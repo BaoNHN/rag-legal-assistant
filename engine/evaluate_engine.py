@@ -17,10 +17,39 @@ os.makedirs(DATASET_DIR, exist_ok=True)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+# Plain-text marker for rag_engine.ask_rag()'s RAG_SYSTEM_ERROR_MESSAGE
+# ("❌ Lỗi hệ thống.") — matched as a substring rather than importing and
+# comparing the full constant so this never depends on the leading emoji
+# round-tripping identically through every encoding step (console, Excel
+# export, retry) involved in a full-eval run.
+_RAG_ERROR_TEXT = "Lỗi hệ thống"
+
+# Judge model for _llm_score — deliberately NOT the same model rag_engine.py
+# uses to generate answers (llama-3.1-8b-instant stays there; its answers
+# were consistently fine all session, only the JUDGE was unreliable).
+# llama-3.1-8b-instant as judge repeatedly hallucinated on clean, correct
+# answers — invented reasons that contradicted the text it was shown (e.g.
+# "không trích dẫn đúng điều luật" for an answer that plainly cites the
+# right one), and got stuck returning all-zero scores for some prompts no
+# matter how many times retried. Directly A/B tested 4 of the worst-offending
+# cases against llama-3.3-70b-versatile — perfect or near-perfect, sane
+# scores on all 4, no hallucinated reasoning (2026-07-29 review). Lower
+# TPD budget than 8b-instant (100K vs 500K) but a 100-question full-eval
+# uses well under that.
+JUDGE_MODEL = "llama-3.3-70b-versatile"
+
 # There's no UI to browse historical eval runs, only the most recent one
 # matters — keep disk clutter down by pruning older eval_results_*.xlsx files
 # every time a new one is written.
 KEEP_LATEST_EVAL_FILES = 2
+
+# Full Evaluation (mode=llm) used to score every row in every Dataset_* sheet
+# (up to 200 questions) — each question costs a Groq call (RAG answer) plus
+# another Groq call (LLM judge), so a full run burns ~400 calls and several
+# minutes of wall time. Random-sampling down to a fixed size keeps a full
+# run affordable while still exercising a broad, shuffled slice of the
+# dataset each time (see run_evaluation's split == "all" branch).
+FULL_EVAL_SAMPLE_SIZE = 100
 LATEST_RESULT_PATH     = os.path.join(BASE_DIR, "eval_results_latest.json")
 
 # ── Job registry ─────────────────────────────────────────────────────────────
@@ -30,7 +59,16 @@ _lock = threading.Lock()
 
 def get_eval_job(job_id: str) -> dict:
     with _lock:
-        return _jobs.get(job_id, {})
+        job = dict(_jobs.get(job_id, {}))
+    # Recomputed fresh on every read (not stored as a fixed value) so it stays
+    # accurate no matter when the frontend happens to poll — a stale "seconds
+    # left" cached at write time would only be correct at the instant it was
+    # set. Absent/zero once the deadline has passed, which naturally lets the
+    # poller fall back to its default interval.
+    retry_until = job.get("retry_wait_until")
+    if retry_until:
+        job["next_poll_in"] = max(0, round(retry_until - time.time(), 1))
+    return job
 
 
 def _set(job_id: str, **kwargs):
@@ -175,6 +213,84 @@ def _citation_grounded(generated: str, article_ref: str) -> bool:
     return any(n.lower() in gen_lower for n in law_nums) if law_nums else False
 
 
+_REASON_FALSE_CITATION_CLAIMS = [
+    "không trích dẫn đúng", "không trích đúng", "không nêu đúng điều",
+    "không có căn cứ", "trích dẫn sai", "không đề cập điều luật",
+    "không trích dẫn", "sai điều luật", "không liên quan đến câu hỏi",
+    "không liên quan tới câu hỏi",
+]
+
+
+def _reason_contradicts_facts(reason: str, generated: str, article_ref: str) -> bool:
+    """True when the judge's own "reason" field asserts something a
+    deterministic check disproves — e.g. claims the required article isn't
+    cited (or the answer isn't related to the question) when
+    _citation_grounded says the article demonstrably IS present. Seen live
+    (2026-07-29, ELK006 retest): judge scored legal_accuracy=2 with reason
+    "Câu trả lời AI không đúng về người đại diện theo pháp luật, không trích
+    dẫn đúng điều luật và không liên quan đến câu hỏi" — flatly false, the
+    answer both names Điều 12 and is squarely about legal representatives.
+    A reason this disconnected from the actual text means the judge's read
+    of the ANSWER was bad, not just one score — the whole response is
+    suspect, not salvageable by patching individual fields, so this is
+    treated the same as the all-zero/missing-keys guards: reject and let
+    the retry-at-temperature=0.7 path (see ValueError handler) try again."""
+    if not reason:
+        return False
+    reason_lower = reason.lower()
+    claims_false = any(p in reason_lower for p in _REASON_FALSE_CITATION_CLAIMS)
+    return claims_false and _citation_grounded(generated, article_ref)
+
+
+_SECONDARY_REF_RE = re.compile(r'Điều\s+(\d+[a-z]?)\s*\(([^)]+)\)', re.IGNORECASE)
+
+
+def _citation_score(generated: str, article_ref: str, question: str) -> int:
+    """Deterministic citation_correct score (0-3) — replaces relying on the
+    judge model to distinguish "correct primary" (2) from "fully complete"
+    (3). Two separate prompt rewrites explicitly spelling out that
+    distinction still couldn't get an 8B judge to reliably award 3 for a
+    correctly, cleanly cited single-article answer (2026-07-29 review).
+
+    Rules (per user directive, 2026-07-29 — "chỉ trừ nếu nguồn tham khảo
+    không có keyword... hoặc thiếu điều expected mới trừ"):
+      0 — the required primary article isn't cited anywhere.
+      2 — primary is cited, but either a required secondary article
+          (article_ref names more than one) is missing, or a *listed*
+          secondary reference is genuinely off-topic (shares no keyword
+          with the question at all — e.g. citing "Các hành vi bị nghiêm
+          cấm" into a "Giải thích từ ngữ" question is noise, not
+          thoroughness; most secondary refs the system surfaces ARE
+          topically related and should NOT cost a point).
+      3 — primary (and any required secondary) present, no off-topic
+          secondary reference detected.
+    """
+    from engine.rag_engine import tokenize, STOPWORDS
+
+    required = _extract_article_numbers(article_ref)
+    gen_lower = generated.lower()
+
+    if not required:
+        return 3 if _citation_grounded(generated, article_ref) else 0
+
+    cited = set(re.findall(r'điều\s+(\d+[a-z]?)\b', gen_lower))
+    if required[0] not in cited:
+        return 0
+
+    if any(n not in cited for n in required[1:]):
+        return 2
+
+    q_words = {w for w in tokenize(question) if w not in STOPWORDS}
+    for num, topic in _SECONDARY_REF_RE.findall(generated):
+        if num in required:
+            continue  # a required article, not an "extra" secondary one
+        t_words = {w for w in tokenize(topic) if w not in STOPWORDS}
+        if q_words and t_words and not (q_words & t_words):
+            return 2  # off-topic secondary reference — real noise
+
+    return 3
+
+
 def _auto_score(question: str, generated: str, expected: str,
                 article_ref: str, keywords: str, retrieved_context: str,
                 expected_retrieved_context: str = "") -> dict:
@@ -265,10 +381,18 @@ def _auto_score(question: str, generated: str, expected: str,
 def _extract_retry_after(e: Exception) -> float | None:
     """Pull the server-suggested wait time out of a rate-limit error instead
     of guessing. Groq's 429s carry a `retry-after` response header, and the
-    error body also spells it out in prose ("Please try again in 4.348s") —
-    either one is a more accurate wait than our fixed backoff schedule, which
-    is just a blind guess at how long the rate-limit window is. Only falls
-    back to the fixed schedule (in the caller) when neither is present."""
+    error body also spells it out in prose — either one is a more accurate
+    wait than our fixed backoff schedule, which is just a blind guess at how
+    long the rate-limit window is. Only falls back to the fixed schedule (in
+    the caller) when neither is present.
+
+    The prose format varies with how long the wait is: a per-minute limit
+    reads "Please try again in 4.348s", but a per-day (TPD) limit — the
+    daily quota resets far less often — reads "Please try again in 2m31.0272s"
+    or even with an hours component. The original regex only matched the
+    bare-seconds form, so a TPD 429 (see 2026-07-27 eval run) silently fell
+    through to the fixed schedule every time instead of waiting the ~2.5
+    minutes the server actually asked for."""
     response = getattr(e, "response", None)
     if response is not None:
         header = getattr(response, "headers", {}).get("retry-after")
@@ -277,15 +401,19 @@ def _extract_retry_after(e: Exception) -> float | None:
                 return float(header)
             except ValueError:
                 pass
-    match = re.search(r"try again in (\d+(?:\.\d+)?)s", str(e), re.IGNORECASE)
+    match = re.search(
+        r"try again in (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s",
+        str(e), re.IGNORECASE
+    )
     if match:
-        return float(match.group(1))
+        hours, minutes, seconds = match.groups()
+        return (int(hours or 0) * 3600) + (int(minutes or 0) * 60) + float(seconds)
     return None
 
 
 # ── LLM scorer (Groq) ─────────────────────────────────────────────────────────
 def _llm_score(question: str, generated: str, expected: str,
-               article_ref: str, groq_key: str) -> dict:
+               article_ref: str, groq_key: str, job_id: str = None) -> dict:
     """LLM-judge scoring. On total judge failure (Groq unreachable / response
     never parses to JSON after every retry) returns {"connection_error": True}
     instead of a score — this is an external connectivity/API failure, not a
@@ -296,36 +424,77 @@ def _llm_score(question: str, generated: str, expected: str,
     questions, several of which had answers matching the expected answer
     almost verbatim — the RAG system wasn't at fault, the judge call was."""
     from langchain_groq import ChatGroq
-    llm = ChatGroq(api_key=groq_key, model="llama-3.1-8b-instant", temperature=0)
+    llm = ChatGroq(api_key=groq_key, model=JUDGE_MODEL, temperature=0)
+    # Lazily created only if a ValueError retry actually needs it (see below) —
+    # a second client at a non-zero temperature so a retry isn't just the
+    # first, deterministic call played back verbatim.
+    llm_warm = None
+
+    # Same split _auto_score already uses for its word-count/clarity check —
+    # the "📖 Nguồn chính / 📎 Nguồn tham khảo" footer (see build_citation() in
+    # rag_engine.py) is structured citation metadata for the end user, not
+    # part of the LLM's own answer. Feeding it to the judge anyway silently
+    # dragged legal_accuracy from 2 down to 1 on otherwise byte-identical,
+    # near-verbatim-correct answers — confirmed by A/B testing the exact same
+    # answer with/without the footer (2026-07-28 eval review: 36/37 low-score
+    # rows in one run shared this exact legal_accuracy=1 pattern, and every
+    # one of them had a multi-entry "📎 Nguồn tham khảo" footer). Likely
+    # because the footer's secondary-article list (sometimes with a stray
+    # duplicate reference — see ELK006, "Điều 12, Điều 13, Điều 12; Điều 13")
+    # reads to the judge as the answer being unsure which article actually
+    # applies, even though the body above it commits to one clearly.
+    graded_answer = generated.split("📖 Nguồn chính:")[0].strip()
 
     prompt = f"""Bạn là giáo viên chấm điểm câu trả lời pháp lý.
 
 Câu hỏi: {question}
 Câu trả lời của AI:
-{generated}
+{graded_answer}
 Câu trả lời mẫu:
 {expected}
 Điều luật cần trích dẫn: {article_ref}
 
 Hãy chấm điểm từ 0-3 cho mỗi tiêu chí sau và trả về JSON:
-- legal_accuracy: Độ chính xác pháp lý (0=sai, 1=thiếu, 2=cơ bản đúng, 3=đúng đầy đủ)
-- citation_correct: Trích dẫn điều luật (0=không có/sai, 1=mơ hồ, 2=đúng chính, 3=đúng đầy đủ).
-  QUAN TRỌNG: nếu câu trả lời của AI có trích đúng "Điều luật cần trích dẫn" ở trên (dù ở phần Kết
-  luận hay Căn cứ pháp lý), hãy chấm citation_correct TỐI THIỂU 2 điểm — kể cả khi câu trả lời còn
-  liệt kê thêm các Điều luật liên quan khác trong phần Căn cứ pháp lý. CHỈ chấm dưới 2 khi Điều luật
-  cần trích dẫn bị thiếu hoàn toàn hoặc bị trích sai số.
-- retrieval_relevance: Nội dung dựa vào đúng điều luật (0-3)
+- legal_accuracy: Độ chính xác pháp lý của "Kết luận"/"Phân tích" so với "Câu trả lời mẫu" — CHỈ xét
+  nội dung/kết luận pháp lý, KHÔNG xét đúng/sai số Điều trích dẫn ở đây (đã có citation_correct riêng
+  cho việc đó, đừng phạt trùng).
+  0 = Sai quy tắc pháp lý hoặc kết luận ngược/sai bản chất so với câu trả lời mẫu.
+  1 = Đúng một phần nhưng thiếu điều kiện, ngoại lệ hoặc giới hạn QUAN TRỌNG khiến câu trả lời có thể
+      gây hiểu sai khi áp dụng thực tế.
+  2 = Đúng cơ bản về nội dung pháp lý chính, chỉ thiếu chi tiết PHỤ không làm thay đổi bản chất kết luận.
+  3 = Đúng đầy đủ: kết luận phù hợp với câu trả lời mẫu, nêu đúng điều kiện/phạm vi/giới hạn quan trọng
+      (nếu có).
+  QUAN TRỌNG:
+  - So sánh Ý NGHĨA pháp lý, không so sánh câu chữ — không giảm điểm chỉ vì câu trả lời AI diễn đạt
+    khác câu trả lời mẫu.
+  - Nếu câu trả lời AI truyền đạt đầy đủ cùng kết luận, cùng điều kiện áp dụng, cùng phạm vi với câu
+    trả lời mẫu, PHẢI chấm 3 điểm.
+  - Chỉ giảm điểm khi AI thực sự bỏ sót điều kiện/ngoại lệ/giới hạn QUAN TRỌNG có trong câu trả lời mẫu.
+  - Nếu kết luận đúng nhưng chỉ thiếu chi tiết phụ không ảnh hưởng bản chất, ưu tiên chấm 2 điểm thay
+    vì 1 điểm.
+- citation_correct: Trích dẫn điều luật (0=không có/sai, 1=mơ hồ, 2=đúng chính, 3=đúng đầy đủ)
+- retrieval_relevance: Nội dung dựa vào đúng điều luật (0=không liên quan, 1=liên quan yếu,
+  2=đúng điều luật nhưng còn nhiễu, 3=bám sát đúng điều luật chính, không nhiễu).
+  QUAN TRỌNG: "nhiễu" nghĩa là nội dung lạc sang quy định KHÔNG liên quan tới câu hỏi — không phải
+  việc câu trả lời có đề cập thêm 1-2 điều luật liên quan chặt chẽ để giải thích rõ hơn. Nếu toàn bộ
+  nội dung đều bám sát và phục vụ đúng câu hỏi, chấm 3 điểm dù có nhắc thêm điều luật liên quan.
 - hallucination: Không bịa đặt (0=bịa nhiều, 1=có bịa, 2=ít bịa, 3=không bịa)
 - clarity: Rõ ràng, dễ hiểu (0-3)
+- reason: 1 câu ngắn giải thích lý do chấm legal_accuracy như trên (để tiện audit sau này)
 
-Chỉ trả về JSON, không giải thích. Ví dụ:
-{{"legal_accuracy":2,"citation_correct":3,"retrieval_relevance":2,"hallucination":3,"clarity":3}}"""
+Chỉ trả về JSON, không giải thích thêm. Ví dụ:
+{{"legal_accuracy":2,"citation_correct":3,"retrieval_relevance":2,"hallucination":3,"clarity":3,"reason":"Kết luận đúng nhưng thiếu điều kiện trách nhiệm vô hạn nêu trong câu trả lời mẫu."}}"""
 
     # Backoff: 15s, 30s, 60s, 90s, 120s
     wait_times = [15, 30, 60, 90, 120]
     for attempt in range(len(wait_times) + 1):
         try:
-            response = llm.invoke(prompt).content.strip()
+            # First attempt uses the deterministic temp=0 client; if that
+            # response gets rejected below (ValueError), later attempts use
+            # the warmed-up client instead so a retry can actually land on a
+            # different response (see the ValueError handler).
+            active_llm = llm if attempt == 0 else (llm_warm or llm)
+            response = active_llm.invoke(prompt).content.strip()
             # Anchor on "legal_accuracy" actually appearing inside the
             # matched span — a bare `\{[^}]+\}` can grab an unrelated
             # brace-delimited fragment from stray text around the model's
@@ -352,15 +521,55 @@ Chỉ trả về JSON, không giải thích. Ví dụ:
                 # verdict — treat it as a bad response and retry.
                 if all(sc.get(k, 0) == 0 for k in RUBRIC):
                     raise ValueError(f"judge returned all-zero scores, treating as invalid: {sc}")
-                # Deterministic floor — don't trust the judge's
-                # citation_correct blindly when the answer demonstrably cites
-                # the right article (see _citation_grounded docstring).
-                if _citation_grounded(generated, article_ref):
-                    sc["citation_correct"] = max(sc.get("citation_correct", 0), 2)
+                # The judge's own stated "reason" can flatly contradict facts
+                # a deterministic check already verifies (see
+                # _reason_contradicts_facts docstring) — that means its read
+                # of the answer was bad, not just one field, so the whole
+                # response is untrustworthy the same way an all-zero response
+                # is, not just the specific score the bad reason was for.
+                if _reason_contradicts_facts(sc.get("reason", ""), generated, article_ref):
+                    raise ValueError(f"judge reason contradicts facts, treating as invalid: {sc}")
+                # citation_correct is fully code-determined, not left to the
+                # judge — see _citation_score's docstring for why (two
+                # separate prompt rewrites explicitly spelling out the 2-vs-3
+                # distinction still couldn't get an 8B judge to reliably
+                # award 3 for a correctly, cleanly cited single-article
+                # answer). Overwrites whatever the judge returned for this
+                # key entirely, per user directive 2026-07-29.
+                sc["citation_correct"] = _citation_score(generated, article_ref, question)
                 sc["total"] = round(
                     sum((sc.get(k, 0) / 3.0) * RUBRIC[k] * 100 for k in RUBRIC), 1
                 )
                 return sc
+        except ValueError as e:
+            # Our own guard rejected the judge's response (missing rubric
+            # keys, or all-zero scores). At temperature=0 the model answers
+            # 100% deterministically (confirmed by direct repeat-testing the
+            # same prompt 5x — bit-identical every time), so backing off
+            # 15/30/60/90/120s (~5 minutes) before resending the exact same
+            # prompt just burns time and tokens for a guaranteed-repeat
+            # failure (2026-07-29: user watched exactly this happen on a live
+            # eval run, Groq usage barely moving). Worse, the failure can be
+            # extremely sensitive to wording the judge shouldn't even care
+            # about — same eval review found ELK006 scored a clean 2/3 on
+            # legal_accuracy with a messy, duplicated "Điều 12, Điều 13, Điều
+            # 12; Điều 13" citation line, then scored all-zero across every
+            # single axis once that line was cleaned up to just "Điều 12"
+            # (2026-07-29 build_legal_basis_line fix) — nothing else in the
+            # answer changed. Retrying at temperature=0.7 gives the model an
+            # actual chance to land somewhere sane instead of replaying the
+            # same glitch, still gated by the same missing-key/all-zero
+            # checks above before being trusted. 0.3 wasn't enough — directly
+            # tested on this exact ELK006 case, 0.3 still landed all-zero on
+            # 2/2 tries; 0.7 broke out of it on 3/3 tries (still imperfect
+            # scores sometimes, but never all five axes at 0 again).
+            if attempt < 2:
+                if llm_warm is None:
+                    llm_warm = ChatGroq(api_key=groq_key, model=JUDGE_MODEL, temperature=0.7)
+                print(f"  [retry {attempt + 1}/2] temperature=0.7, no wait (temp=0 response was invalid) — {str(e)[:120]}")
+            else:
+                print(f"  [FAIL] LLM scoring failed — judge response invalid on every attempt: {e}")
+                break
         except Exception as e:
             if attempt < len(wait_times):
                 server_wait = _extract_retry_after(e)
@@ -370,7 +579,13 @@ Chỉ trả về JSON, không giải thích. Ví dụ:
                           f"after {wait}s (server-reported)...")
                 else:
                     wait = wait_times[attempt]
-                    print(f"  [429] Rate limit - retry {attempt + 1}/{len(wait_times)} after {wait}s...")
+                    print(f"  [retry {attempt + 1}/{len(wait_times)}] after {wait}s — {str(e)[:120]}")
+                if job_id:
+                    # Lets the frontend's poll loop space its /evaluate_status
+                    # requests out to match this wait instead of hammering it
+                    # every 2.5s while we're known to be asleep for up to
+                    # several minutes (see get_eval_job's next_poll_in).
+                    _set(job_id, retry_wait_until=time.time() + wait)
                 time.sleep(wait)
             else:
                 print(f"  [FAIL] LLM scoring failed after all retries: {e}")
@@ -557,8 +772,13 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
             if split == "test" and "split" in df.columns:
                 df = df[df["split"] == "test"]
 
+        total_available = len(df)
+        if split == "all" and total_available > FULL_EVAL_SAMPLE_SIZE:
+            df = df.sample(n=FULL_EVAL_SAMPLE_SIZE).reset_index(drop=True)
+
         n = len(df)
-        _set(job_id, message=f"Bắt đầu đánh giá {n} câu hỏi (mode={mode}, split={split})…", progress=0)
+        sample_note = f" — lấy mẫu ngẫu nhiên {n}/{total_available} câu" if n < total_available else ""
+        _set(job_id, message=f"Bắt đầu đánh giá {n} câu hỏi (mode={mode}, split={split}){sample_note}…", progress=0)
 
         # Resolve Groq key for LLM mode
         groq_key = None
@@ -609,16 +829,7 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
             except Exception as e:
                 generated = f"ERROR: {e}"
 
-            if mode == "llm" and groq_key:
-                sc = _llm_score(question, generated, expected, art_ref, groq_key)
-                time.sleep(3)   # ~20 req/min → stay under Groq free-tier limit
-            else:
-                sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
-
-            if sc.get("connection_error"):
-                # Groq unreachable for this question after every retry — an
-                # external failure, not a defect in the RAG answer. Excluded
-                # entirely from scoring/averages; goes in its own sheet instead.
+            def _mark_connection_error():
                 connection_error_rows.append({
                     "id":            q_id,
                     "question_type": q_type,
@@ -628,6 +839,29 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
                     "expected":      expected,
                     "article_ref":   art_ref,
                 })
+
+            # ask_rag() itself has no retry on Groq failures (unlike
+            # _llm_score's job_id-aware backoff below) — on any internal
+            # exception it just returns this placeholder string as if it
+            # were a real answer. Scoring it would judge the RAG on a Groq
+            # outage, not on its actual output — same "external failure,
+            # not a RAG defect" logic as the connection_error path below, so
+            # route it there directly instead of ever calling the judge.
+            if _RAG_ERROR_TEXT in generated:
+                _mark_connection_error()
+                continue
+
+            if mode == "llm" and groq_key:
+                sc = _llm_score(question, generated, expected, art_ref, groq_key, job_id=job_id)
+                time.sleep(3)   # ~20 req/min → stay under Groq free-tier limit
+            else:
+                sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
+
+            if sc.get("connection_error"):
+                # Groq unreachable for this question after every retry — an
+                # external failure, not a defect in the RAG answer. Excluded
+                # entirely from scoring/averages; goes in its own sheet instead.
+                _mark_connection_error()
                 continue
 
             for k in RUBRIC:
@@ -644,6 +878,11 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
                 "article_ref":   art_ref,
                 **{f"score_{k}": sc.get(k, 0) for k in RUBRIC},
                 "score_total":   sc["total"],
+                # The judge's own one-line reason for legal_accuracy (see
+                # prompt) — lets a human spot-check a low score without
+                # having to re-derive why by hand, the way every legal_accuracy
+                # investigation this session had to.
+                "legal_accuracy_reason": sc.get("reason", ""),
             })
 
         avg_total  = round(sum(totals) / max(len(totals), 1), 1)
@@ -804,15 +1043,7 @@ def _run_cli(mode: str, split: str):
             except Exception as e:
                 generated = f"ERROR: {e}"
 
-            # ── Step 2: Score ──
-            pbar.set_description(f"[{q_id}] Scoring...")
-            if mode == "llm" and groq_key:
-                sc = _llm_score(question, generated, expected, art_ref, groq_key)
-                time.sleep(3)
-            else:
-                sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
-
-            if sc.get("connection_error"):
+            def _mark_connection_error():
                 connection_error_rows.append({
                     "id":            q_id,
                     "question_type": q_type,
@@ -822,6 +1053,26 @@ def _run_cli(mode: str, split: str):
                     "expected":      expected,
                     "article_ref":   art_ref,
                 })
+
+            # See run_evaluation's identical check — ask_rag() itself has no
+            # retry, so a Groq failure inside it surfaces as this placeholder
+            # string rather than a raised exception.
+            if _RAG_ERROR_TEXT in generated:
+                _mark_connection_error()
+                pbar.set_description(f"[{q_id}] connection error - skipped")
+                pbar.update(1)
+                continue
+
+            # ── Step 2: Score ──
+            pbar.set_description(f"[{q_id}] Scoring...")
+            if mode == "llm" and groq_key:
+                sc = _llm_score(question, generated, expected, art_ref, groq_key)
+                time.sleep(3)
+            else:
+                sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
+
+            if sc.get("connection_error"):
+                _mark_connection_error()
                 pbar.set_description(f"[{q_id}] connection error - skipped")
                 pbar.update(1)
                 continue

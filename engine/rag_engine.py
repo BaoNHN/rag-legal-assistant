@@ -499,8 +499,18 @@ def _strip_tone(text: str) -> str:
 
 
 def _phrase_in(phrase: str, text: str) -> bool:
-    """Tone-mark-typo-tolerant substring check, for the phrase lists below."""
-    return _strip_tone(phrase) in _strip_tone(text)
+    """Tone-mark-typo-tolerant, case-insensitive substring check, for the
+    phrase lists below. Lowercasing here (not left to each call site) matters
+    because _strip_tone alone does NOT lowercase — a capitalized word at the
+    very start of a sentence ("Hộ kinh doanh phát hiện...") silently failed
+    to match its lowercase phrase-list entry ("hộ kinh doanh") with no error,
+    just a phrase check that always came back False for any question
+    starting that way (2026-07-29 review, ELU186: this is why a "hộ kinh
+    doanh" question's household-business boost never fired — some existing
+    callers pre-lowercase their own `question` before calling this, e.g.
+    detect_query_constraints's normalize_text(), but relying on every
+    call site to remember that is exactly how this slipped through)."""
+    return _strip_tone(phrase.lower()) in _strip_tone(text.lower())
 
 
 _ENTITY_ONE_MEMBER_PHRASES = [
@@ -546,18 +556,47 @@ _INTENT_PROCEDURE_PHRASES = [
     "nộp hồ sơ", "thành lập",
 ]
 _INTENT_DEFINITION_PHRASES = ["là gì", "khái niệm", "định nghĩa"]
-_INTENT_SCENARIO_PHRASES = ["anh a", "chị b", "ông c", "bà d", "tình huống", "có được không", "đúng hay sai"]
+_INTENT_SCENARIO_PHRASES = [
+    # No hardcoded honorific+letter combos ("anh a"/"chị b"/"ông c"/"bà d")
+    # — that enumeration only ever covered 4 pseudonyms and missed every
+    # other name a scenario question might use ("anh Tèo", "bà Mị", a bare
+    # "R"...). Relying only on question-ending phrases below is name-agnostic
+    # and catches the same questions regardless of what the hypothetical
+    # party is called.
+    "tình huống", "có được không", "đúng hay sai",
+    "có còn là", "có phải là", "có còn được coi là", "có còn được xem là",
+    # Yes/no question endings — deliberately excludes open wh-question
+    # endings ("như thế nào", "thế nào", "ra sao", "là gì", "bao lâu"...) —
+    # those legitimately belong to procedure/definition intent (e.g.
+    # "Thành lập ... như thế nào?" must stay "procedure"), and excludes bare
+    # "không?"/"chưa?" alone — too broad, would flip roughly half of all
+    # yes/no-phrased questions in the corpus to scenario intent.
+    "được không", "phải không", "đúng không", "có đúng không", "hay không",
+    "được chưa", "rồi chưa",
+]
 
 
 def detect_query_constraints(question: str) -> dict:
     q = normalize_text(question)
     intent = "general"
-    if any(_phrase_in(p, q) for p in _INTENT_PROCEDURE_PHRASES):
-        intent = "procedure"
+    # Scenario checked BEFORE procedure — bare "thành lập" (establish) is in
+    # _INTENT_PROCEDURE_PHRASES and matches almost any hypothetical about
+    # forming a company ("R muốn thành lập... Có còn là...không?"), even when
+    # the actual question is a yes/no eligibility/classification check, not
+    # a "how do I register" procedure question. That let "thành lập" win the
+    # old procedure-first order and drag in _ESTABLISHMENT_DOC_TYPES articles
+    # (hồ sơ/trình tự/cấp GCN) over the real definitional article (Điều 74)
+    # (2026-07-28 eval review, ELS022/ELS040 both misfired this way). A
+    # scenario phrase like "có được không"/"có còn là" is a far more specific
+    # signal than a bare "thành lập" mention, so it should win when both are
+    # present — a genuine procedure question ("thành lập ... như thế nào?")
+    # still falls through correctly since it matches no scenario phrase.
+    if any(_phrase_in(p, q) for p in _INTENT_SCENARIO_PHRASES):
+        intent = "scenario"
     elif any(_phrase_in(p, q) for p in _INTENT_DEFINITION_PHRASES):
         intent = "definition"
-    elif any(_phrase_in(p, q) for p in _INTENT_SCENARIO_PHRASES):
-        intent = "scenario"
+    elif any(_phrase_in(p, q) for p in _INTENT_PROCEDURE_PHRASES):
+        intent = "procedure"
     return {"entity_type": _detect_entity_type(q), "intent": intent}
 
 
@@ -749,6 +788,21 @@ def retrieve_docs(question: str, rewritten_q: str):
                 return exact[:5]
 
         # ===== STRICT TOPIC MATCH =====
+        # For a bare generic noun ("doanh nghiệp") the SequenceMatcher ratio
+        # against ANY longer topic that happens to contain it as a substring
+        # ("Tên doanh nghiệp", "Doanh nghiệp xã hội"...) is inherently high —
+        # that's a property of string containment, not evidence the topic is
+        # actually about defining the term. Short-circuiting straight to
+        # scored[:5] on that alone previously made "Doanh nghiệp là gì?" cite
+        # Điều 37/Điều 10 instead of the real definition in Điều 4 (2026-07-28
+        # eval review) — semantic search alone ranked Điều 4 far closer
+        # (0.60 vs 0.81+ L2 distance) but never got a chance to run. Only a
+        # near-exact topic match (topic == kb_topic, sim ≥ ~1.5 — containment
+        # bonuses alone can reach at most ~1.3) is trusted enough to
+        # short-circuit; anything looser is merged with the keyword/semantic
+        # candidates below instead of replacing them, so the reranker can
+        # still weigh in.
+        topic_candidates = []
         if topic:
             scored = []
 
@@ -772,17 +826,31 @@ def retrieve_docs(question: str, rewritten_q: str):
 
             scored.sort(key=lambda x: x[0], reverse=True)
 
-            # confidence threshold
-            if scored and scored[0][0] >= 0.55:
+            if scored and scored[0][0] >= 1.5:
                 return [d for _, d in scored[:5]]
+            if scored and scored[0][0] >= 0.55:
+                topic_candidates = [d for _, d in scored[:5]]
 
         # ===== BARE-KEYWORD SUBSTRING MATCH =====
         # Short queries like "Tập đoàn" (no question phrasing, no topic/article
         # match above) — embedding similarity is unreliable for 1-3 word
         # Vietnamese legal terms with an English-tuned model. Scan titles and
         # content directly for the phrase instead.
+        #
+        # Gated on `not topic` — this is meant only for genuinely bare noun
+        # queries with no question phrasing (as the comment above always
+        # said), but the code never actually checked that, so a phrased
+        # query like "Doanh nghiệp là gì?" (4 words, so still ≤5) fell
+        # through to this raw substring scan too. Many Q&A-style chunks in
+        # this corpus are templated as "...quy định về <X> là gì?", and
+        # whenever X itself happens to end in "doanh nghiệp" (e.g. "cấp giấy
+        # chứng nhận đăng ký doanh nghiệp"), the chunk's own embedded
+        # question coincidentally contains "doanh nghiệp là gì?" as a
+        # substring — matching completely unrelated articles (Điều 27/28/212
+        # about certificates, not the Điều 4 definition) on pure string luck
+        # (2026-07-28 eval review, same report as the topic-match fix above).
         q_lower = question.lower().strip()
-        if q_lower and len(q_lower.split()) <= 5:
+        if not topic and q_lower and len(q_lower.split()) <= 5:
             kw_hits = [
                 d for d in all_docs
                 if q_lower in d.page_content.lower() or q_lower in d.metadata.get("title", "").lower()
@@ -811,7 +879,7 @@ def retrieve_docs(question: str, rewritten_q: str):
         semantic_candidates = [doc for doc, score in results_with_scores if score <= SIMILARITY_THRESHOLD]
 
         merged, seen = [], set()
-        for d in kw_candidates + semantic_candidates:
+        for d in topic_candidates + kw_candidates + semantic_candidates:
             if d.page_content not in seen:
                 merged.append(d)
                 seen.add(d.page_content)
@@ -938,6 +1006,36 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str) -> int:
     # land them in the top context slots.
     if intent == "procedure" and metadata.get("doc_type", "") in _ESTABLISHMENT_DOC_TYPES:
         score += 25
+
+    # "Hộ kinh doanh" (household business) questions need Nghị định
+    # 168/2025/NĐ-CP content specifically — Luật Doanh nghiệp (so_ky_hieu
+    # 59/2020/QH14 / 67/VBHN-VPQH) covers company registration, a DIFFERENT
+    # legal instrument that happens to share heavy vocabulary overlap ("hồ
+    # sơ", "giấy chứng nhận", "cơ quan đăng ký kinh doanh") with hộ kinh
+    # doanh procedures. Without this, "hồ sơ" alone in a hộ kinh doanh
+    # question triggers the procedure-intent boost above for
+    # company-registration articles (curated KB rows, which DO have a
+    # doc_type), while the correct hộ kinh doanh article in NĐ 168/2025 (a
+    # plain law-import chunk with no doc_type) gets none — see 2026-07-29
+    # review, ELU186: "Điều 26 (Luật Doanh nghiệp)" outranked the exactly-
+    # matching "Điều 115 Nghị định 168/2025/NĐ-CP" this way even though
+    # Điều 115 is a word-for-word match for the question.
+    if _phrase_in("hộ kinh doanh", question) and (
+        "168/2025" in metadata.get("so_ky_hieu", "") or _phrase_in("hộ kinh doanh", content)
+    ):
+        score += 25
+    # A +25 boost alone wasn't enough — company-registration articles (KB-
+    # curated rows) stack so many OTHER bonuses (procedure +25, "dataset"
+    # 3x keyword weight, kb_articles_updated +10, exact-phrase +10 for
+    # sharing "cơ quan đăng ký kinh doanh" with the question) that even
+    # boosted, the correct hộ kinh doanh article still lost 59 vs 96
+    # (measured live, 2026-07-29, ELU186). Company registration
+    # (_ESTABLISHMENT_DOC_TYPES) and household-business registration are
+    # different legal regimes — a hộ kinh doanh question is NEVER correctly
+    # answered by one of these, so penalize directly instead of just
+    # boosting the competition and hoping it's enough.
+    if _phrase_in("hộ kinh doanh", question) and metadata.get("doc_type", "") in _ESTABLISHMENT_DOC_TYPES:
+        score -= 40
 
     # "Chuyển đổi loại hình doanh nghiệp" articles (convert_jsc_to_single_llc,
     # convert_llc_to_jsc...) share almost all of their vocabulary with a
@@ -1160,14 +1258,25 @@ def _resolve_primary_article_ref(meta: dict, content: str = "", answer: str = ""
 
 
 def build_legal_basis_line(meta: dict, secondary_docs=None, content: str = "", answer: str = "") -> str:
-    """Builds the answer body's "Căn cứ pháp lý" line entirely from
-    best_doc/extra_docs metadata — replaces an earlier version where the LLM
-    was asked to write this line itself from a prompt hint, which in
-    practice could drift from Nguồn chính (LLM wrote "Điều 74" while Nguồn
-    chính correctly said "Điều 21" — nhận xét 25/7 follow-up). Lists the same
-    articles as Nguồn chính + Nguồn tham khảo combined, since a "thành lập X"
-    question usually genuinely needs several articles together (hồ sơ +
-    trình tự + định nghĩa), not just one."""
+    """Builds the answer body's "Căn cứ pháp lý" line entirely from best_doc's
+    own metadata — replaces an earlier version where the LLM was asked to
+    write this line itself from a prompt hint, which in practice could drift
+    from Nguồn chính (LLM wrote "Điều 74" while Nguồn chính correctly said
+    "Điều 21" — nhận xét 25/7 follow-up).
+
+    Only the primary article — secondary_docs is accepted for call-site
+    compatibility with build_citation() but deliberately unused here. An
+    earlier version blended in up to 3 secondary_docs articles here (reasoning
+    that a "thành lập X" question often needs hồ sơ + trình tự + định nghĩa
+    together), but that applied indiscriminately to plain single-article
+    lookup questions too ("Theo Luật Doanh nghiệp 2020, quy định về X là gì?")
+    — for those, listing 2-3 tangential articles alongside the one actually
+    asked about reads as imprecise rather than thorough, which is exactly
+    what both an independent human review and the LLM judge flagged
+    (2026-07-29 review: 17/20 low-legal_accuracy rows correctly named the
+    right article here but buried it among tangential ones). Secondary/
+    related articles still surface separately in build_citation()'s own
+    "📎 Nguồn tham khảo" footer — this line just no longer duplicates them."""
     so_ky_hieu = meta.get("so_ky_hieu", "")
     if so_ky_hieu and not is_known_citation_source(so_ky_hieu):
         so_ky_hieu = ""
@@ -1176,30 +1285,12 @@ def build_legal_basis_line(meta: dict, secondary_docs=None, content: str = "", a
     if not primary_ref:
         return ""
 
-    refs = [primary_ref]
-    seen = {meta.get("article_reference", "")}
-    same_law_only = True
-
-    for doc in (secondary_docs or [])[:3]:
-        m = doc.metadata
-        s_article = m.get("article_reference", "")
-        s_ky_hieu = m.get("so_ky_hieu", "")
-        if not s_article or s_article in seen:
-            continue
-        if s_ky_hieu and not is_known_citation_source(s_ky_hieu):
-            continue
-        seen.add(s_article)
-        refs.append(s_article)
-        if s_ky_hieu and s_ky_hieu != meta.get("so_ky_hieu", ""):
-            same_law_only = False
-
-    line = ", ".join(refs)
-    if same_law_only:
-        law_name = f"{meta.get('loai_van_ban', '')} {so_ky_hieu}".strip()
-        if "67/VBHN" in so_ky_hieu or "59/2020" in so_ky_hieu:
-            law_name = "Văn bản hợp nhất Luật Doanh nghiệp số 67/VBHN-VPQH năm 2025"
-        if law_name:
-            line += f" — {law_name}"
+    line = primary_ref
+    law_name = f"{meta.get('loai_van_ban', '')} {so_ky_hieu}".strip()
+    if "67/VBHN" in so_ky_hieu or "59/2020" in so_ky_hieu:
+        law_name = "Văn bản hợp nhất Luật Doanh nghiệp số 67/VBHN-VPQH năm 2025"
+    if law_name:
+        line += f" — {law_name}"
     return line
 
 
@@ -1364,6 +1455,16 @@ def _answer_meta_law_count(question: str) -> str:
         return f"❌ Lỗi: {e}"
 
 
+# Returned by ask_rag()'s catch-all below on any unhandled failure (most
+# commonly a Groq connection/rate-limit error with no retry at this layer,
+# unlike evaluate_engine._llm_score). Exported as a constant rather than a
+# bare string literal so evaluate_engine can recognize it and route the
+# question into the connection-error bucket instead of scoring "❌ Lỗi hệ
+# thống." as if it were a real RAG answer (2026-07-28 eval review — 18/55
+# low-score rows in one run were this placeholder, not genuine bad answers).
+RAG_SYSTEM_ERROR_MESSAGE = "❌ Lỗi hệ thống."
+
+
 def ask_rag(question: str, return_debug: bool = False, voice: str = "formal"):
     try:
         question = str(question)
@@ -1497,7 +1598,7 @@ def ask_rag(question: str, return_debug: bool = False, voice: str = "formal"):
 
     except Exception as e:
         print("RAG ERROR:", e)
-        return "❌ Lỗi hệ thống."
+        return RAG_SYSTEM_ERROR_MESSAGE
 
 
 # Runs once at import time, at the true bottom of the module so every name it

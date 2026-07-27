@@ -41,8 +41,6 @@ BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # en
 DB_PATH      = os.path.join(BASE_DIR, "chroma_db")
 INSERT_BATCH = 32
 
-CHAT_TITLE = "Nhập văn bản tình huống"
-
 # ── Job registry ─────────────────────────────────────────────────────────────
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
@@ -279,7 +277,7 @@ def run_import_scenario(job_id: str, file_path: str, student_id: int,
     finally:
         try:
             msg = get_scenario_job(job_id).get("message", "Xử lý hoàn tất.")
-            upsert_import_chat(student_id, msg, title=CHAT_TITLE)
+            upsert_import_chat(student_id, msg)
         except Exception:
             pass
         try:

@@ -366,7 +366,7 @@ Ngay khi mở tab, hệ thống tự gọi `GET /latest_eval_result` và hiển 
 | Chế độ | Dữ liệu dùng | Cách chấm | Tốc độ |
 |---|---|---|---|
 | **⚡ Quick Evaluation** | **Toàn bộ** sheet `Demo_*` có trong file đã chọn, gộp lại và loại trùng theo cột `id` (VD file có cả `Demo_30` và `Demo_50` → gộp thành 50 câu duy nhất) | `auto` — so khớp từ khóa/trích dẫn (offline, không cần Groq) | Nhanh |
-| **🔬 Full Evaluation** | **Toàn bộ** sheet `Dataset_*` có trong file đã chọn, gộp lại và loại trùng theo cột `id` — đây là **bộ dữ liệu đầy đủ** của file (VD file có cả `Dataset_150` và `Dataset_200` → gộp thành 200 câu duy nhất), không phải bản rút gọn | `llm` — chấm bằng Groq LLM theo rubric | Chậm hơn (~3s/câu do throttle Groq) |
+| **🔬 Full Evaluation** | Gộp toàn bộ sheet `Dataset_*` có trong file đã chọn, loại trùng theo cột `id` (VD file có cả `Dataset_150` và `Dataset_200` → gộp thành 200 câu), sau đó **lấy mẫu ngẫu nhiên tối đa 100 câu** từ tập đã gộp nếu tập đó lớn hơn 100 (mỗi lần chạy chọn ngẫu nhiên lại, không cố định) — mỗi câu tốn 1 lượt gọi Groq cho RAG + 1 lượt cho giám khảo, nên test hết 200 câu tốn gấp đôi token/thời gian so với lấy mẫu 100 | `llm` — chấm bằng Groq LLM theo rubric | Chậm hơn (~3s/câu do throttle Groq) |
 
 File `Dataset/example_sheet.xlsx` minh hoạ đúng quy ước đặt tên: sheet **`Demo_Quick_example`** (tiền tố `Demo_`) cho Quick Evaluation, sheet **`Dataset_example`** (tiền tố `Dataset_`) cho Full Evaluation. Đổi tên sheet sang tiền tố khác sẽ khiến sheet đó biến mất khỏi cả dropdown lẫn 2 nút đánh giá — `list_available_datasets()`/`run_evaluation()` trong `engine/evaluate_engine.py` chỉ quét đúng theo 2 tiền tố này.
 

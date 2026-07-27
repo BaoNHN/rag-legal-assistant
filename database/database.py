@@ -61,6 +61,31 @@ def init_db():
     # init_db() only ever runs after the whole module has finished loading.
     c.execute("UPDATE chats SET title=? WHERE title=?", (NOTIFICATION_CHAT_TITLE, "Import new law"))
 
+    # Scenario import used to post to its own separate status chat
+    # ("Nhập văn bản tình huống") instead of the shared "Thông báo" chat —
+    # redundant, and unlike NOTIFICATION_CHAT_TITLE it wasn't excluded from
+    # MAX_CHATS_PER_USER or locked read-only in the UI. Fold any such legacy
+    # chat's messages into the user's "Thông báo" chat (creating one if they
+    # don't have it yet) and drop the now-empty legacy chat.
+    c.execute("SELECT id, student_id FROM chats WHERE title=? AND role=1", ("Nhập văn bản tình huống",))
+    for legacy_id, uid in c.fetchall():
+        c.execute(
+            "SELECT id FROM chats WHERE student_id=? AND title=? AND role=1 ORDER BY created_at DESC LIMIT 1",
+            (uid, NOTIFICATION_CHAT_TITLE)
+        )
+        row = c.fetchone()
+        if row:
+            target_id = row[0]
+        else:
+            target_id = f"import_{int(time.time()*1000)}_{uid}"
+            c.execute(
+                "INSERT INTO chats (id, student_id, title, created_at, role) VALUES (?,?,?,?,?)",
+                (target_id, uid, NOTIFICATION_CHAT_TITLE, time.time(), 1)
+            )
+        c.execute("UPDATE messages SET chat_id=? WHERE chat_id=?", (target_id, legacy_id))
+        c.execute("DELETE FROM chats WHERE id=?", (legacy_id,))
+        _trim_notification_messages(c, target_id)
+
     # ── messages
     c.execute("""
         CREATE TABLE IF NOT EXISTS messages (
@@ -174,6 +199,7 @@ def get_const(name: str) -> str:
 # any chat to exactly this string (substrings like "Thông báo họp" are fine).
 NOTIFICATION_CHAT_TITLE = "Thông báo"
 MAX_CHATS_PER_USER = 5
+NOTIFICATION_KEEP_LATEST = 5
 
 
 # =========================
@@ -305,8 +331,21 @@ def delete_chat(chat_id: str):
     conn.close()
 
 
+def _trim_notification_messages(c, chat_id: str, keep: int = NOTIFICATION_KEEP_LATEST):
+    """Delete all but the `keep` most recent messages in a notification chat —
+    these chats only ever accumulate (one import = one more message, forever),
+    so without a cap they'd grow unbounded."""
+    c.execute(
+        "DELETE FROM messages WHERE chat_id=? AND id NOT IN ("
+        "  SELECT id FROM messages WHERE chat_id=? ORDER BY timestamp DESC LIMIT ?"
+        ")",
+        (chat_id, chat_id, keep)
+    )
+
+
 def upsert_import_chat(user_id: int, message: str, title: str = NOTIFICATION_CHAT_TITLE):
-    """Create the given teacher-chat title if missing, append message to it."""
+    """Create the given teacher-chat title if missing, append message to it,
+    then trim to the latest NOTIFICATION_KEEP_LATEST messages."""
     conn  = sqlite3.connect(DB_NAME)
     c     = conn.cursor()
 
@@ -327,6 +366,7 @@ def upsert_import_chat(user_id: int, message: str, title: str = NOTIFICATION_CHA
         "INSERT INTO messages (chat_id, role, text, timestamp) VALUES (?,?,?,?)",
         (chat_id, "assistant", message, time.time())
     )
+    _trim_notification_messages(c, chat_id)
     conn.commit()
     conn.close()
 
