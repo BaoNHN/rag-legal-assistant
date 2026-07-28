@@ -11,7 +11,6 @@ import io
 from engine.rag_engine import (
     ask_rag,
     list_indexed_sources, delete_source, get_law_source_info,
-    list_dataset_sources, delete_dataset_source,
     list_scenario_sources, delete_scenario_source,
 )
 from database.database import (
@@ -25,6 +24,7 @@ from database.database import (
     change_user_password,
     create_keyword, get_all_keywords, get_active_keywords, set_keyword_status,
     get_source_keywords, set_source_keywords,
+    get_all_dataset_files, delete_dataset_file,
 )
 from engine.import_law_engine import run_import, get_job
 from engine.import_scenario_engine import run_import_scenario, get_scenario_job
@@ -437,7 +437,12 @@ async def toggle_keyword_status_route(request: Request):
 async def list_dataset_sources_route(request: Request):
     if not logged_in(request) or not is_admin(request):
         return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
-    return list_dataset_sources()
+    # Dataset files are test/evaluation fixtures only (2026-07-28) — tracked in
+    # chat.db, never embedded into ChromaDB. See engine/import_dataset_engine.py.
+    return [
+        {"name": f["filename"], "importer": f["importer"], "uploaded_at": f["uploaded_at"]}
+        for f in get_all_dataset_files()
+    ]
 
 
 @app.post("/delete_dataset_source")
@@ -450,13 +455,24 @@ async def delete_dataset_source_route(request: Request):
     if not source_name:
         return JSONResponse({"status": "error", "message": "Thiếu name"}, status_code=400)
 
-    deleted = delete_dataset_source(source_name)
-    if deleted == 0:
+    tracked = {f["filename"] for f in get_all_dataset_files()}
+    if source_name not in tracked:
         return JSONResponse(
-            {"status": "error", "message": f"Không tìm thấy dataset '{source_name}' trong ChromaDB."},
+            {"status": "error", "message": f"Không tìm thấy dataset '{source_name}' trong danh sách đã theo dõi."},
             status_code=404,
         )
-    return {"status": "ok", "deleted": deleted}
+
+    delete_dataset_file(source_name)
+    # Also remove the physical file so it stops showing up in the Quick/Full
+    # Evaluation dataset dropdown (engine.evaluate_engine.list_available_datasets
+    # scans Dataset/ directly from disk).
+    file_path = os.path.join(BASE_DIR, "Dataset", source_name)
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception:
+        pass
+    return {"status": "ok"}
 
 
 @app.get("/list_scenario_sources")

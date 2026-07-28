@@ -404,10 +404,10 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 
   <!-- ══ Dataset ══ -->
   <div class="tab-panel" id="panelDataset">
-    <p class="tab-desc">Nhóm theo tên file .xlsx đã tải lên. Các dòng nhập trước khi có tính năng theo dõi tệp sẽ gộp chung vào một mục "không rõ tệp".</p>
+    <p class="tab-desc">Các file dataset .xlsx đã tải lên — chỉ dùng làm bộ dữ liệu Quick/Full Evaluation (mục kiểm thử), <strong>không</strong> nạp vào ChromaDB và không ảnh hưởng câu trả lời thật cho người dùng.</p>
     <div class="table-card">
       <table>
-        <thead><tr><th>Tên file</th><th>Người nhập</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
+        <thead><tr><th>Tên file</th><th>Người nhập</th><th>Ngày nhập</th><th>Quản lý</th></tr></thead>
         <tbody id="datasetTbody"><tr><td colspan="4" class="empty-state">Đang tải…</td></tr></tbody>
       </table>
     </div>
@@ -572,9 +572,14 @@ function showLoadError(msg) {
 
 // ── generic row renderer ──
 // opts.onView: function name to call for a "Xem thông tin" button (both roles)
+// opts.thirdColumn(item): custom renderer for the 3rd column — defaults to
+// the ChromaDB chunk-count display used by Law/Scenario. Dataset files no
+// longer have chunks (2026-07-28 — see engine/import_dataset_engine.py), so
+// that tab passes its own renderer showing the upload date instead.
 // Xoá button only renders for admin.
 function renderRows(tbodyId, items, nameKey, onDelete, opts) {
   opts = opts || {};
+  const thirdColumn = opts.thirdColumn || (it => `${it.chunk_count} đoạn`);
   const tbody = document.getElementById(tbodyId);
   if (!Array.isArray(items) || items.length === 0) {
     tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Chưa có dữ liệu nào.</td></tr>';
@@ -584,7 +589,7 @@ function renderRows(tbodyId, items, nameKey, onDelete, opts) {
     <tr>
       <td>${escapeHtml(it[nameKey])}</td>
       <td>${escapeHtml(it.importer || 'admin1')}</td>
-      <td class="chunk-count">${it.chunk_count} đoạn</td>
+      <td class="chunk-count">${thirdColumn(it)}</td>
       <td>
         ${opts.onView ? `<button class="btn-action btn-view" data-idx="${i}" onclick="${opts.onView}(this)">Xem thông tin</button>` : ''}
         ${IS_ADMIN ? `<button class="btn-action btn-delete" data-idx="${i}" onclick="${onDelete}(this)">Xoá</button>` : ''}
@@ -636,7 +641,11 @@ async function loadDataset() {
     const res = await fetch('/list_dataset_sources');
     if (res.status === 403) { window.location.href = '/'; return; }
     const data = await res.json();
-    renderRows('datasetTbody', data, 'name', 'deleteDataset');
+    renderRows('datasetTbody', data, 'name', 'deleteDataset', {
+      thirdColumn: it => it.uploaded_at
+        ? new Date(it.uploaded_at * 1000).toLocaleString('vi-VN')
+        : '–',
+    });
   } catch (e) {
     showLoadError('❌ Lỗi tải danh sách dataset: ' + e.message);
   }
@@ -646,7 +655,7 @@ async function deleteDataset(btn) {
   const items = JSON.parse(document.getElementById('datasetTbody').dataset.items || '[]');
   const name  = items[Number(btn.dataset.idx)];
   if (!name) return;
-  if (!confirm(`Xoá toàn bộ dữ liệu của "${name}" khỏi ChromaDB? Hành động này không thể hoàn tác.`)) return;
+  if (!confirm(`Xoá file dataset "${name}" (khỏi danh sách theo dõi và khỏi thư mục Dataset/)? File này sẽ không còn dùng được cho Quick/Full Evaluation. Hành động này không thể hoàn tác.`)) return;
 
   btn.disabled = true; btn.textContent = 'Đang xoá…';
   try {

@@ -270,6 +270,22 @@ def init_db():
             [(k,) for k in _seed_out_of_scope_keywords]
         )
 
+    # ── dataset_file (test/evaluation dataset registry — added 2026-07-28)
+    # Dataset Excel uploads no longer get embedded into ChromaDB (a real
+    # data-leakage risk was confirmed: the same question/answer rows used by
+    # Quick/Full Evaluation were retrievable as real-answer context). Instead
+    # an uploaded file is only saved to Dataset/ on disk and tracked here —
+    # this table is what the Manage Law "Dataset" tab lists/deletes from, not
+    # ChromaDB metadata (see engine.import_dataset_engine.run_import_dataset).
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS dataset_file (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename    TEXT UNIQUE NOT NULL,
+            importer    TEXT,
+            uploaded_at REAL
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -757,3 +773,49 @@ def get_source_keywords_map() -> dict:
         bucket = by_key.setdefault(source_key, {"primary": set(), "secondary": set()})
         bucket["primary" if kind == "primary" else "secondary"].add(name.lower())
     return result
+
+
+# =========================
+# DATASET FILE REGISTRY (test/evaluation datasets only — see init_db() comment;
+# these files are never embedded into ChromaDB and never affect real answers)
+# =========================
+def register_dataset_file(filename: str, importer: str = "admin1"):
+    """Records (or re-stamps) a dataset file saved to Dataset/ as a tracked
+    evaluation dataset. Upsert — re-uploading the same filename just updates
+    importer/uploaded_at rather than erroring on the UNIQUE constraint."""
+    filename = (filename or "").strip()
+    if not filename:
+        return
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute(
+        "INSERT INTO dataset_file (filename, importer, uploaded_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(filename) DO UPDATE SET importer=excluded.importer, uploaded_at=excluded.uploaded_at",
+        (filename, importer, time.time())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_all_dataset_files() -> list:
+    """Every tracked dataset file — for the Manage Law 'Dataset' tab."""
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        "SELECT filename, importer, uploaded_at FROM dataset_file ORDER BY filename ASC"
+    ).fetchall()
+    conn.close()
+    return [{"filename": r[0], "importer": r[1] or "admin1", "uploaded_at": r[2]} for r in rows]
+
+
+def delete_dataset_file(filename: str):
+    """Removes a filename from the tracking table. Does not touch the file on
+    disk — callers that also want the physical file gone should remove it
+    from Dataset/ themselves."""
+    filename = (filename or "").strip()
+    if not filename:
+        return
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute("DELETE FROM dataset_file WHERE filename=?", (filename,))
+    conn.commit()
+    conn.close()
