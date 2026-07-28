@@ -10,7 +10,7 @@ import io
 
 from engine.rag_engine import (
     ask_rag,
-    list_indexed_sources, delete_source,
+    list_indexed_sources, delete_source, get_law_source_info,
     list_dataset_sources, delete_dataset_source,
     list_scenario_sources, delete_scenario_source,
 )
@@ -23,6 +23,8 @@ from database.database import (
     get_chat_title, NOTIFICATION_CHAT_TITLE, MAX_CHATS_PER_USER,
     get_all_users, set_user_status, delete_user,
     change_user_password,
+    create_keyword, get_all_keywords, get_active_keywords, set_keyword_status,
+    get_source_keywords, set_source_keywords,
 )
 from engine.import_law_engine import run_import, get_job
 from engine.import_scenario_engine import run_import_scenario, get_scenario_job
@@ -57,6 +59,16 @@ def is_teacher(request: Request) -> bool:
 def is_admin(request: Request) -> bool:
     return request.session.get("role", 0) == 2
 
+def _parse_keyword_ids(raw: str) -> list:
+    """Parses a comma-joined string of keyword ids (as sent by the tag-picker
+    FormData field) into a list of ints, silently dropping non-numeric parts."""
+    out = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.append(int(part))
+    return out
+
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
@@ -85,7 +97,7 @@ async def manage_accounts_page(request: Request):
 
 @app.get("/manage_law", response_class=HTMLResponse)
 async def manage_law_page(request: Request):
-    if not logged_in(request) or not is_admin(request):
+    if not logged_in(request) or not is_teacher(request):
         return RedirectResponse("/", status_code=302)
     return templates.TemplateResponse(request, "manage_law.html")
 
@@ -225,6 +237,8 @@ async def import_law(
     so_ky_hieu: str = Form(""),
     loai_van_ban: str = Form(""),
     nguon_thu_thap: str = Form(""),
+    primary_keyword_ids: str = Form(""),
+    secondary_keyword_ids: str = Form(""),
     pdf_file: UploadFile = File(None),
 ):
     if not logged_in(request) or not is_teacher(request):
@@ -238,6 +252,14 @@ async def import_law(
         return JSONResponse({
             "status": "error",
             "message": "Vui lòng tải lên file PDF hoặc DOCX và điền đầy đủ tất cả 3 trường."
+        }, status_code=400)
+
+    primary_ids   = _parse_keyword_ids(primary_keyword_ids)
+    secondary_ids = _parse_keyword_ids(secondary_keyword_ids)
+    if not primary_ids:
+        return JSONResponse({
+            "status": "error",
+            "message": "Vui lòng chọn ít nhất 1 Từ khóa chính."
         }, status_code=400)
 
     filename_lower = (pdf_file.filename or "").lower()
@@ -265,6 +287,8 @@ async def import_law(
         student_id=teacher_id,
         db_conn_factory=get_conn,
         importer=importer,
+        primary_keyword_ids=primary_ids,
+        secondary_keyword_ids=secondary_ids,
     )
 
     return {"status": "ok", "job_id": job_id, "message": "Đã nhận file. Đang xử lý nền…"}
@@ -276,9 +300,16 @@ async def import_status(job_id: str):
     return job if job else {"status": "unknown"}
 
 
+@app.get("/list_active_keywords")
+async def list_active_keywords_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return get_active_keywords()
+
+
 @app.get("/list_law_sources")
 async def list_law_sources_route(request: Request):
-    if not logged_in(request) or not is_admin(request):
+    if not logged_in(request) or not is_teacher(request):
         return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
     return list_indexed_sources()
 
@@ -300,6 +331,106 @@ async def delete_law_source_route(request: Request):
             status_code=404,
         )
     return {"status": "ok", "deleted": deleted}
+
+
+# Law only — Dataset/Scenario are test/enrichment data (auto-tagged secondary
+# keywords at import time, see import_dataset_engine.py/import_scenario_engine.py)
+# and deliberately have no "Xem thông tin" view/edit capability in Manage Law.
+_SOURCE_INFO_FNS = {
+    "law": (get_law_source_info, "văn bản"),
+}
+
+
+@app.get("/get_source_info")
+async def get_source_info_route(request: Request, source_type: str = Query(...), source_key: str = Query(...)):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    entry = _SOURCE_INFO_FNS.get(source_type)
+    if not entry:
+        return JSONResponse({"status": "error", "message": "source_type không hợp lệ."}, status_code=400)
+    info_fn, label = entry
+
+    info = info_fn(source_key)
+    if not info:
+        return JSONResponse(
+            {"status": "error", "message": f"Không tìm thấy {label} '{source_key}' trong ChromaDB."},
+            status_code=404,
+        )
+    info["source_type"] = source_type
+    info["source_key"]  = source_key
+    info["keywords"]    = get_source_keywords(source_type, source_key)
+    return info
+
+
+@app.post("/update_source_keywords")
+async def update_source_keywords_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data        = await request.json()
+    source_type = (data.get("source_type") or "").strip()
+    source_key  = (data.get("source_key") or "").strip()
+    primary     = data.get("primary_keyword_ids") or []
+    secondary   = data.get("secondary_keyword_ids") or []
+
+    if source_type not in _SOURCE_INFO_FNS:
+        return JSONResponse({"status": "error", "message": "source_type không hợp lệ."}, status_code=400)
+    if not source_key:
+        return JSONResponse({"status": "error", "message": "Thiếu source_key"}, status_code=400)
+    if not primary:
+        return JSONResponse({"status": "error", "message": "Vui lòng chọn ít nhất 1 Từ khóa chính."}, status_code=400)
+
+    try:
+        primary_ids   = [int(x) for x in primary]
+        secondary_ids = [int(x) for x in secondary]
+    except (TypeError, ValueError):
+        return JSONResponse({"status": "error", "message": "ID từ khóa không hợp lệ."}, status_code=400)
+
+    set_source_keywords(source_type, source_key, primary_ids, secondary_ids)
+    return {"status": "ok"}
+
+
+# ── Keyword management (admin adds/toggles, teacher+admin read for pickers) ────
+@app.get("/list_keywords")
+async def list_keywords_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return get_all_keywords()
+
+
+@app.post("/add_keyword")
+async def add_keyword_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data            = await request.json()
+    name            = (data.get("name") or "").strip()
+    is_out_of_scope = bool(data.get("is_out_of_scope"))
+    if not name:
+        return JSONResponse({"status": "error", "message": "Vui lòng nhập tên từ khóa."}, status_code=400)
+
+    keyword_id = create_keyword(name, is_out_of_scope=is_out_of_scope)
+    if keyword_id is None:
+        return JSONResponse({"status": "error", "message": f"Từ khóa '{name}' đã tồn tại."}, status_code=400)
+    return {"status": "ok", "id": keyword_id}
+
+
+@app.post("/toggle_keyword_status")
+async def toggle_keyword_status_route(request: Request):
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data       = await request.json()
+    keyword_id = data.get("id")
+    status     = data.get("status")
+    # 0/1 = scoring keyword active/disabled, 2/3 = out-of-scope keyword
+    # active/disabled — see database.database's KEYWORD_STATUS_* constants.
+    if keyword_id is None or status not in (0, 1, 2, 3):
+        return JSONResponse({"status": "error", "message": "Thiếu tham số"}, status_code=400)
+
+    set_keyword_status(keyword_id, status)
+    return {"status": "ok"}
 
 
 @app.get("/list_dataset_sources")

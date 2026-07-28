@@ -263,6 +263,12 @@ def run_import_dataset(job_id: str, file_path: str, original_filename: str = Non
     original_filename: the name the user uploaded, used to persist the file
     into BASE_DIR afterwards (see _persist_uploaded_dataset) so it becomes
     selectable in RAG evaluation.
+
+    No manual keyword picker here (unlike Law import) — Dataset content is
+    test/enrichment data, not the authoritative source, so it never gets the
+    primary-keyword scoring buff. Instead every unique phrase in the file's
+    own `retrieval_keywords` column is auto-tagged as a *secondary* keyword
+    (see the end of the try-block below).
     """
     _set(job_id, status="running", message="Đang đọc file dataset…")
     source_file = os.path.basename(original_filename) if original_filename else os.path.basename(file_path)
@@ -321,9 +327,10 @@ def run_import_dataset(job_id: str, file_path: str, original_filename: str = Non
         )
         vs        = Chroma(persist_directory=DB_PATH, embedding_function=embedding)
 
-        existing         = vs.get(include=["metadatas"])
-        existing_ids     = {m.get("so_ky_hieu", "").strip() for m in existing["metadatas"]}
-        existing_doc_ids = {m.get("doc_id", "").strip() for m in existing["metadatas"]}
+        existing          = vs.get(include=["metadatas", "documents"])
+        existing_ids      = {m.get("so_ky_hieu", "").strip() for m in existing["metadatas"]}
+        existing_doc_ids  = {m.get("doc_id", "").strip() for m in existing["metadatas"]}
+        existing_contents = set(existing["documents"])
 
         new_docs = []
         skipped  = 0
@@ -336,6 +343,16 @@ def run_import_dataset(job_id: str, file_path: str, original_filename: str = Non
                 skipped += 1
                 continue
             if not doc_id and ky_hieu in existing_ids and "KB_Articles" in nguon:
+                skipped += 1
+                continue
+            # Rows with neither a doc_id nor "KB_Articles" nguon_thu_thap
+            # (e.g. Legal_Update_2025, whose nguon_thu_thap is the literal
+            # string "Legal_Update_2025") have no natural unique key and
+            # weren't caught by either check above — fall back to exact
+            # content match so re-importing the same file doesn't duplicate
+            # them (found live 2026-07-28: re-running import on an
+            # already-indexed file added 7 duplicate Legal_Update_2025 chunks).
+            if not doc_id and d.page_content in existing_contents:
                 skipped += 1
                 continue
             new_docs.append(d)
@@ -362,6 +379,23 @@ def run_import_dataset(job_id: str, file_path: str, original_filename: str = Non
         # citable immediately (see engine.rag_engine.refresh_citation_sources).
         from engine.rag_engine import refresh_citation_sources
         refresh_citation_sources()
+
+        # Auto-tag this uploaded file with every unique retrieval_keywords
+        # phrase found across its own rows (see database.database.keyword /
+        # source_keyword) — keyed by source_file since that's how
+        # list_dataset_sources() groups chunks from this import type (dataset
+        # chunks all share so_ky_hieu="59/2020/QH14"). Secondary only —
+        # Dataset is test/enrichment data, never the primary-keyword-buffed
+        # authoritative source (that's reserved for Law imports).
+        from database.database import get_or_create_keyword, set_source_keywords
+        unique_phrases = set()
+        for d in all_docs:
+            for phrase in (d.metadata.get("retrieval_keywords") or "").split(";"):
+                phrase = phrase.strip()
+                if phrase:
+                    unique_phrases.add(phrase)
+        secondary_ids = [get_or_create_keyword(p) for p in unique_phrases]
+        set_source_keywords("dataset", source_file, [], secondary_ids)
 
         _set(job_id, status="done", message=result_msg)
 

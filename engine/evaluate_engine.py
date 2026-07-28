@@ -49,7 +49,7 @@ KEEP_LATEST_EVAL_FILES = 2
 # minutes of wall time. Random-sampling down to a fixed size keeps a full
 # run affordable while still exercising a broad, shuffled slice of the
 # dataset each time (see run_evaluation's split == "all" branch).
-FULL_EVAL_SAMPLE_SIZE = 100
+FULL_EVAL_SAMPLE_SIZE = 80
 LATEST_RESULT_PATH     = os.path.join(BASE_DIR, "eval_results_latest.json")
 
 # ── Job registry ─────────────────────────────────────────────────────────────

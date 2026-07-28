@@ -19,7 +19,14 @@ STOPWORDS = {
     "trong", "được", "cho", "có", "khi"
 }
 
-# Keywords indicating out-of-scope questions (not business law)
+# Keywords indicating out-of-scope questions (not business law). As of
+# 2026-07-28 this is a FALLBACK ONLY — the live source of truth is
+# database.database.get_active_out_of_scope_keywords() (keyword.status=2,
+# admin-editable in the "Từ khóa" tab), loaded once per ask_rag() call and
+# passed into _is_out_of_scope(). This constant is used only if that DB read
+# fails, so out-of-scope blocking fails safe (still blocks something) rather
+# than fails open (blocks nothing) — do not delete even though it's no
+# longer the primary path.
 OUT_OF_SCOPE_KEYWORDS = [
     "ly hôn", "li hôn", "hôn nhân", "gia đình", "ly thân", "kết hôn",
     "hình sự", "tội phạm", "khởi tố", "bắt giữ", "truy tố", "tù giam",
@@ -209,6 +216,33 @@ def list_indexed_sources() -> list:
         {"so_ky_hieu": k, "chunk_count": v, "importer": importers.get(k, DEFAULT_IMPORTER)}
         for k, v in sorted(counts.items())
     ]
+
+
+def get_law_source_info(so_ky_hieu: str) -> dict:
+    """Basic metadata for one law source (so_ky_hieu, loai_van_ban,
+    nguon_thu_thap, chunk_count, importer) for the Manage Law 'Xem thông tin'
+    modal — deliberately excludes page_content/chunk text."""
+    so_ky_hieu = (so_ky_hieu or "").strip()
+    if not so_ky_hieu:
+        return {}
+
+    try:
+        data = vectorstore.get(where={"so_ky_hieu": so_ky_hieu}, include=["metadatas"])
+    except Exception:
+        return {}
+
+    metas = data.get("metadatas") or []
+    if not metas:
+        return {}
+
+    first = metas[0]
+    return {
+        "so_ky_hieu": so_ky_hieu,
+        "loai_van_ban": first.get("loai_van_ban", ""),
+        "nguon_thu_thap": first.get("nguon_thu_thap", ""),
+        "chunk_count": len(metas),
+        "importer": first.get("importer") or DEFAULT_IMPORTER,
+    }
 
 
 def delete_source(so_ky_hieu: str) -> int:
@@ -757,6 +791,60 @@ def _keyword_recall(question: str, all_docs: list, top_n: int = 5, min_score: in
     return [d for _, d in scored[:top_n]]
 
 
+def _source_keyword_candidates(question: str, all_docs: list, source_keywords_map: dict, top_n: int = 5) -> list:
+    """When the question matches a keyword an admin/teacher tagged onto a
+    source (see database.database.keyword/source_keyword), pull that
+    source's best-matching chunks into the retrieval candidate pool — same
+    rationale as the PROCEDURE-INTENT AUGMENTATION below: a tagged source's
+    chunks might never surface in the semantic/keyword top-5 on their own
+    (e.g. a newly-imported law with no curated retrieval_keywords), so the
+    _score_doc() keyword boost would never get a chance to matter — tagging
+    a source would otherwise only be a tie-breaker among docs retrieval
+    already happened to find, not an actual lever.
+
+    Capped to top_n chunks per matched source (ranked by raw token overlap
+    with the question) — deliberately NOT the whole source. A tagged source
+    can have hundreds of chunks (e.g. 59/2020/QH14 has 310); dumping all of
+    them in would blow up the candidate pool and reintroduce the same
+    noise-drowns-signal failure mode the boost-magnitude fix in _score_doc()
+    was about (measured live 2026-07-28, ELU186 — see that comment for the
+    concrete before/after scores)."""
+    if not source_keywords_map:
+        return []
+
+    q_words = {w for w in tokenize(question) if w not in STOPWORDS}
+    if not q_words:
+        return []
+
+    # Which (source_type, source_key) pairs does this question's text
+    # actually match? Check this first so we don't bother scoring the whole
+    # corpus when no tag applies.
+    matched_keys = set()
+    for source_type, by_key in source_keywords_map.items():
+        for source_key, kw_map in by_key.items():
+            names = kw_map["primary"] | kw_map["secondary"]
+            if any(_phrase_in(name, question) for name in names):
+                matched_keys.add((source_type, source_key))
+    if not matched_keys:
+        return []
+
+    scored_by_source: dict = {}
+    for d in all_docs:
+        key = _source_type_key(d.metadata)
+        if key not in matched_keys:
+            continue
+        content = d.page_content.lower()
+        title = (d.metadata.get("title") or "").lower()
+        score = sum(1 for w in q_words if w in content or w in title)
+        scored_by_source.setdefault(key, []).append((score, d))
+
+    result = []
+    for scored in scored_by_source.values():
+        scored.sort(key=lambda x: x[0], reverse=True)
+        result.extend(d for _, d in scored[:top_n])
+    return result
+
+
 # =========================
 # TOPIC-AWARE RETRIEVAL
 # ─────────────────────────────
@@ -765,7 +853,7 @@ def _keyword_recall(question: str, all_docs: list, top_n: int = 5, min_score: in
 # 2. Fall back to standard semantic search if no match
 # This eliminates wrong article retrieval (Điều 34 instead of 36, etc.)
 # =========================
-def retrieve_docs(question: str, rewritten_q: str):
+def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = None):
     topic = extract_topic_from_question(question)
     article_num = extract_article_number_from_question(question)
 
@@ -884,6 +972,15 @@ def retrieve_docs(question: str, rewritten_q: str):
                 merged.append(d)
                 seen.add(d.page_content)
 
+        # ===== SOURCE-KEYWORD AUGMENTATION =====
+        # See _source_keyword_candidates() docstring — guarantees a tagged
+        # source's best-matching chunks (capped, not the whole source) enter
+        # the candidate pool even if semantic/keyword search above missed them.
+        for d in _source_keyword_candidates(question, all_docs, source_keywords_map):
+            if d.page_content not in seen:
+                merged.append(d)
+                seen.add(d.page_content)
+
         # ===== PROCEDURE-INTENT AUGMENTATION =====
         # "Thành lập công ty X như thế nào?" shares almost all of its
         # vocabulary ("công ty", "tnhh", "thành viên"...) with ownership/
@@ -920,7 +1017,23 @@ _OFFICIAL_SOURCE_MARKERS = [
 ]
 
 
-def _score_doc(question: str, d, q_counter: Counter, intent: str) -> int:
+def _source_type_key(metadata: dict) -> tuple:
+    """Maps a chunk's metadata to the (source_type, source_key) pair used by
+    database.database.source_keyword — see init_db()'s comment on that table
+    for the exact field mapping per import type. Returns (None, "") for
+    chunks from neither of the 3 UI-driven import pipelines (e.g. the
+    standalone database/reference_source.py entries)."""
+    import_source = metadata.get("import_source", "")
+    if import_source == "law":
+        return "law", (metadata.get("so_ky_hieu") or "").strip()
+    if import_source == "dataset":
+        return "dataset", (metadata.get("source_file") or "").strip()
+    if import_source == "scenario":
+        return "scenario", (metadata.get("nguon_thu_thap") or "").strip()
+    return None, ""
+
+
+def _score_doc(question: str, d, q_counter: Counter, intent: str, source_keywords_map: dict = None) -> int:
     score = 0
 
     content = d.page_content.lower()
@@ -988,6 +1101,36 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str) -> int:
     if "dataset_200" in nguon_lower:
         score -= 3
 
+    # Admin/teacher-tagged keyword boost (see database.database.keyword /
+    # source_keyword tables) — this is the generic, extensible replacement
+    # for hardcoding a topic check per source: any law/dataset/scenario
+    # source tagged with a primary keyword that appears in the question gets
+    # a boost, secondary keyword a smaller one. Newly imported sources get
+    # this for free the moment they're tagged, without touching this
+    # function again. Purely additive: source_keywords_map only has entries
+    # for (source_type, source_key) pairs an admin/teacher has actually
+    # tagged, so untagged sources (including everything indexed before this
+    # feature existed) are unaffected.
+    #
+    # Deliberately kept small (8/4, not 25/10): this boost is applied
+    # uniformly to every chunk of the tagged source, including generic raw
+    # law-import text. A so_ky_hieu can have BOTH plain law-import chunks AND
+    # a hand-curated dataset chunk built specifically for a given question
+    # (dataset chunks score higher per-word via kw_word_weight=3 vs 1 for
+    # law-import, see above) — a flat +25 was large enough to let a generic
+    # tagged chunk outscore the correct curated answer by a couple of points
+    # (measured live, 2026-07-28, ELU186: curated chunk scored 84, raw law
+    # chunks scored 61 untagged vs 86 tagged at +25, flipping the winner to
+    # the wrong specific Điều within the right so_ky_hieu). At +8/+4 the same
+    # raw chunks land at 69, still below the curated chunk's 84.
+    source_type, source_key = _source_type_key(metadata)
+    kw_map = (source_keywords_map or {}).get(source_type, {}).get(source_key) if source_type else None
+    if kw_map:
+        if any(_phrase_in(name, question) for name in kw_map["primary"]):
+            score += 8
+        elif any(_phrase_in(name, question) for name in kw_map["secondary"]):
+            score += 4
+
     # Scenario/case-study docs are only appropriate for scenario-style
     # questions ("Anh A... có được không?") — for a general/procedure/
     # definition question, a scenario doc answering a *different*
@@ -1052,7 +1195,7 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str) -> int:
     return score
 
 
-def select_best_doc(question: str, docs):
+def select_best_doc(question: str, docs, source_keywords_map: dict = None):
     q_words = [w for w in tokenize(question) if w not in STOPWORDS]
     q_counter = Counter(q_words)
     intent = detect_query_constraints(question)["intent"]
@@ -1061,7 +1204,7 @@ def select_best_doc(question: str, docs):
     best_score = -1
 
     for d in docs:
-        score = _score_doc(question, d, q_counter, intent)
+        score = _score_doc(question, d, q_counter, intent, source_keywords_map)
         if score > best_score:
             best_score = score
             best_doc = d
@@ -1376,9 +1519,10 @@ def build_citation(meta: dict, secondary_docs=None, content: str = "", answer: s
 # =========================
 # MAIN
 # =========================
-def _is_out_of_scope(question: str) -> bool:
+def _is_out_of_scope(question: str, out_of_scope_keywords: list = None) -> bool:
     q = question.lower()
-    if not any(kw in q for kw in OUT_OF_SCOPE_KEYWORDS):
+    keywords = out_of_scope_keywords if out_of_scope_keywords else OUT_OF_SCOPE_KEYWORDS
+    if not any(kw in q for kw in keywords):
         return False
     # An OUT_OF_SCOPE_KEYWORDS hit alone over-blocks: "C đang bị truy cứu
     # trách nhiệm hình sự nhưng muốn thành lập doanh nghiệp tư nhân..." is a
@@ -1469,8 +1613,21 @@ def ask_rag(question: str, return_debug: bool = False, voice: str = "formal"):
     try:
         question = str(question)
 
+        # Admin/teacher-tagged keyword boosts (see database.database.keyword /
+        # source_keyword) — loaded once per question, small table, no caching
+        # needed. See _score_doc() for how this is used.
+        from database.database import get_source_keywords_map, get_active_out_of_scope_keywords
+        try:
+            source_keywords_map = get_source_keywords_map()
+        except Exception:
+            source_keywords_map = {}
+        try:
+            out_of_scope_keywords = get_active_out_of_scope_keywords()
+        except Exception:
+            out_of_scope_keywords = None  # _is_out_of_scope() falls back to OUT_OF_SCOPE_KEYWORDS
+
         # Pre-check: question outside business law scope
-        if _is_out_of_scope(question):
+        if _is_out_of_scope(question, out_of_scope_keywords):
             return "⚠️ Câu hỏi này nằm ngoài phạm vi dữ liệu Luật Doanh nghiệp của hệ thống. Vui lòng đặt câu hỏi liên quan đến Luật Doanh nghiệp."
 
         # Pre-check: meta about law structure (check before db — more specific)
@@ -1489,7 +1646,7 @@ def ask_rag(question: str, return_debug: bool = False, voice: str = "formal"):
         better_q = question if topic else rewrite_query(question)
 
         # STEP 2: topic-aware retrieval (fixes knowledge question accuracy)
-        docs = retrieve_docs(question, better_q)
+        docs = retrieve_docs(question, better_q, source_keywords_map)
 
         if not docs:
             return "⚠️ Không tìm thấy thông tin đủ liên quan trong cơ sở dữ liệu. Vui lòng hỏi rõ hơn hoặc kiểm tra câu hỏi có thuộc phạm vi Luật Doanh nghiệp không."
@@ -1507,7 +1664,7 @@ def ask_rag(question: str, return_debug: bool = False, voice: str = "formal"):
         # STEP 3: rerank — use the ORIGINAL question, not the LLM-rewritten
         # one: rewrite_query() can drop the exact qualifier ("một thành viên"
         # vs "hai thành viên") that distinguishes otherwise near-identical docs.
-        best_doc = select_best_doc(question, docs)
+        best_doc = select_best_doc(question, docs, source_keywords_map)
         if not best_doc:
             return "❌ Không đủ dữ liệu để trả lời câu hỏi này."
 
@@ -1522,7 +1679,7 @@ def ask_rag(question: str, return_debug: bool = False, voice: str = "formal"):
         intent = detect_query_constraints(question)["intent"]
         ranked_extra = sorted(
             (d for d in docs if d.page_content != best_doc.page_content),
-            key=lambda d: _score_doc(question, d, q_counter, intent),
+            key=lambda d: _score_doc(question, d, q_counter, intent, source_keywords_map),
             reverse=True,
         )
         if intent == "procedure":

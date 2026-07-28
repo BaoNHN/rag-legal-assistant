@@ -218,7 +218,14 @@ def _build_case_doc(case: dict, source_label: str, importer: str) -> Document:
 def run_import_scenario(job_id: str, file_path: str, student_id: int,
                         original_filename: str = None, importer: str = "admin1"):
     """Parse a scenario DOCX and add one chunk per case to ChromaDB (no wipe,
-    skip case_ids already indexed)."""
+    skip case_ids already indexed).
+
+    No manual keyword picker here (unlike Law import) — scenario cases are
+    test/enrichment data, not the authoritative source, so they never get the
+    primary-keyword scoring buff. Instead every unique phrase from each
+    case's own "5. Dữ liệu hỗ trợ truy xuất chatbot" → "Từ khóa:" line is
+    auto-tagged as a *secondary* keyword (see the end of the try-block below).
+    """
     _set_job(job_id, status="running", message="Đang đọc file DOCX…")
     source_label = os.path.splitext(os.path.basename(original_filename or file_path))[0]
 
@@ -266,6 +273,21 @@ def run_import_scenario(job_id: str, file_path: str, student_id: int,
         # consistent with the rest of the import pipeline (see rag_engine.refresh_citation_sources).
         from engine.rag_engine import refresh_citation_sources
         refresh_citation_sources()
+
+        # Auto-tag this uploaded file with every unique "Từ khóa:" phrase
+        # found across its own cases (see database.database.keyword /
+        # source_keyword) — keyed by source_label since that's how
+        # list_scenario_sources() groups cases from this import type (via
+        # nguon_thu_thap). Secondary only — see run_import_scenario docstring.
+        from database.database import get_or_create_keyword, set_source_keywords
+        unique_phrases = set()
+        for c in cases:
+            for phrase in c.get("keywords") or []:
+                phrase = phrase.strip()
+                if phrase:
+                    unique_phrases.add(phrase)
+        secondary_ids = [get_or_create_keyword(p) for p in unique_phrases]
+        set_source_keywords("scenario", source_label, [], secondary_ids)
 
         _set_job(job_id, status="done", message=result_msg)
 

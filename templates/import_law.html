@@ -223,6 +223,53 @@ main {
 .error-msg { display: none; color: var(--red); font-size: 12px; font-weight: 500; margin-top: -8px; margin-bottom: 10px; }
 .global-error { display: none; background: rgba(214,59,59,0.12); border: 1px solid rgba(214,59,59,0.35); color: #FF8080; border-radius: 8px; padding: 10px 13px; font-size: 13px; margin-bottom: 12px; }
 
+/* ── TAG PICKER (Từ khóa chính/phụ) ── */
+.tag-picker { margin-bottom: 12px; }
+.tag-picker-search {
+  width: 100%; padding: 8px 12px; margin-bottom: 6px;
+  background: rgba(255,255,255,0.05);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  color: var(--white);
+  font-size: 13px;
+  font-family: 'DM Sans', sans-serif;
+}
+.tag-picker-search::placeholder { color: rgba(255,255,255,0.35); }
+.tag-picker-search:focus { outline: none; border-color: var(--teal2); background: rgba(255,255,255,0.07); }
+.tag-picker select {
+  width: 100%; padding: 10px 13px;
+  background: var(--navy2);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  color: var(--white);
+  font-size: 13.5px;
+  font-family: 'DM Sans', sans-serif;
+  color-scheme: dark;
+}
+.tag-picker select:focus { outline: none; border-color: var(--teal2); background: rgba(255,255,255,0.07); }
+.tag-picker select.error { border-color: var(--red); }
+/* Some browsers (Chrome/Edge on Windows) render the native <option> popup
+   with its own default background/text color unless styled directly on the
+   <option> itself — without this the dropdown list can render white-on-white
+   and become unreadable against the dark theme. */
+.tag-picker select option { background: var(--navy2); color: var(--white); }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tag-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 6px 5px 11px;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 999px;
+  font-size: 12.5px;
+  color: var(--white);
+}
+.tag-chip button {
+  background: none; border: none; color: var(--gray); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 3px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.tag-chip button:hover { background: rgba(214,59,59,0.18); color: #FF8080; }
+
 /* ── BUTTONS ── */
 .btn-submit {
   width: 100%;
@@ -498,6 +545,21 @@ main {
         <label>Nguồn thu thập <span style="color:var(--red)">*</span></label>
         <input type="text" id="nguonThuThap" placeholder="Ví dụ: Cổng thông tin Chính phủ"/>
         <div class="error-msg" id="errNguonThuThap">Vui lòng nhập Nguồn thu thập</div>
+
+        <label>Từ khóa chính <span style="color:var(--red)">*</span></label>
+        <div class="tag-picker">
+          <input type="text" class="tag-picker-search" id="pdfPrimaryKeywordSearch" placeholder="🔍 Tìm từ khóa…"/>
+          <select id="pdfPrimaryKeywordSelect"><option value="">Đang tải danh sách…</option></select>
+          <div class="tag-chips" id="pdfPrimaryKeywordChips"></div>
+        </div>
+        <div class="error-msg" id="errPdfPrimaryKeyword">Vui lòng chọn ít nhất 1 Từ khóa chính</div>
+
+        <label>Từ khóa phụ</label>
+        <div class="tag-picker">
+          <input type="text" class="tag-picker-search" id="pdfSecondaryKeywordSearch" placeholder="🔍 Tìm từ khóa…"/>
+          <select id="pdfSecondaryKeywordSelect"><option value="">Đang tải danh sách…</option></select>
+          <div class="tag-chips" id="pdfSecondaryKeywordChips"></div>
+        </div>
       </div>
 
       <div class="global-error" id="pdfGlobalError"></div>
@@ -825,6 +887,90 @@ function closeLightbox() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TAG PICKER (Từ khóa chính/phụ) — select an option to add it as a removable
+// chip; picking again only offers keywords not already selected.
+// ─────────────────────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function createTagPicker(selectId, chipsId, searchId) {
+  const selectEl = document.getElementById(selectId);
+  const chipsEl  = document.getElementById(chipsId);
+  const searchEl = searchId ? document.getElementById(searchId) : null;
+  let all = [];          // [{id, name}]
+  let selectedIds = [];
+  let searchQuery = '';
+
+  function render() {
+    const selectedSet = new Set(selectedIds);
+    const q = searchQuery.trim().toLowerCase();
+    const options = all
+      .filter(k => !selectedSet.has(k.id))
+      .filter(k => !q || k.name.toLowerCase().includes(q));
+    selectEl.innerHTML = '<option value="">— Chọn từ khóa —</option>' +
+      options.map(k => `<option value="${k.id}">${escapeHtml(k.name)}</option>`).join('');
+
+    chipsEl.innerHTML = selectedIds.map(id => {
+      const kw = all.find(k => k.id === id);
+      return `<span class="tag-chip">${escapeHtml(kw ? kw.name : String(id))}<button type="button" data-id="${id}">✕</button></span>`;
+    }).join('');
+    chipsEl.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectedIds = selectedIds.filter(x => x !== Number(btn.dataset.id));
+        render();
+      });
+    });
+  }
+
+  selectEl.addEventListener('change', () => {
+    const id = Number(selectEl.value);
+    if (id && !selectedIds.includes(id)) {
+      selectedIds.push(id);
+      render();
+    }
+  });
+
+  if (searchEl) {
+    searchEl.addEventListener('input', () => {
+      searchQuery = searchEl.value;
+      render();
+    });
+  }
+
+  return {
+    setOptions(list) { all = Array.isArray(list) ? list : []; render(); },
+    getSelectedIds()  { return selectedIds.slice(); },
+    setSelected(ids)  { selectedIds = (ids || []).slice(); render(); },
+    clear()           { selectedIds = []; render(); },
+  };
+}
+
+// Manual keyword tagging only applies to Law import — Law is the sole
+// authoritative source and gets the primary-keyword scoring buff. Dataset/
+// Scenario are test/enrichment data, auto-tagged as secondary-only keywords
+// at import time from their own retrieval_keywords/"Từ khóa" fields (see
+// import_dataset_engine.py/import_scenario_engine.py) — no manual UI here.
+const pdfPrimaryKeywordPicker   = createTagPicker('pdfPrimaryKeywordSelect', 'pdfPrimaryKeywordChips', 'pdfPrimaryKeywordSearch');
+const pdfSecondaryKeywordPicker = createTagPicker('pdfSecondaryKeywordSelect', 'pdfSecondaryKeywordChips', 'pdfSecondaryKeywordSearch');
+
+async function loadActiveKeywordsForImport() {
+  try {
+    const res  = await fetch('/list_active_keywords');
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : [];
+    pdfPrimaryKeywordPicker.setOptions(list);
+    pdfSecondaryKeywordPicker.setOptions(list);
+  } catch (e) {
+    pdfPrimaryKeywordPicker.setOptions([]);
+    pdfSecondaryKeywordPicker.setOptions([]);
+  }
+}
+loadActiveKeywordsForImport();
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PDF / DOCX UPLOAD
 // ─────────────────────────────────────────────────────────────────────────────
 let pdfSelectedFile = null;
@@ -866,6 +1012,8 @@ function clearPdfErrors() {
     const eid = 'err' + id[0].toUpperCase() + id.slice(1);
     document.getElementById(eid).style.display = 'none';
   });
+  document.getElementById('pdfPrimaryKeywordSelect').classList.remove('error');
+  document.getElementById('errPdfPrimaryKeyword').style.display = 'none';
   document.getElementById('pdfGlobalError').style.display = 'none';
 }
 
@@ -874,6 +1022,8 @@ async function handlePdfSubmit() {
   const soKyHieu     = document.getElementById('soKyHieu').value.trim();
   const loaiVanBan   = document.getElementById('loaiVanBan').value.trim();
   const nguonThuThap = document.getElementById('nguonThuThap').value.trim();
+  const primaryIds   = pdfPrimaryKeywordPicker.getSelectedIds();
+  const secondaryIds = pdfSecondaryKeywordPicker.getSelectedIds();
   let hasErr = false;
 
   if (!pdfSelectedFile) {
@@ -884,6 +1034,11 @@ async function handlePdfSubmit() {
   if (!soKyHieu)     { showPdfFieldErr('soKyHieu');     hasErr = true; }
   if (!loaiVanBan)   { showPdfFieldErr('loaiVanBan');   hasErr = true; }
   if (!nguonThuThap) { showPdfFieldErr('nguonThuThap'); hasErr = true; }
+  if (primaryIds.length === 0) {
+    document.getElementById('pdfPrimaryKeywordSelect').classList.add('error');
+    document.getElementById('errPdfPrimaryKeyword').style.display = 'block';
+    hasErr = true;
+  }
   if (hasErr) return;
 
   const btn = document.getElementById('pdfSubmitBtn');
@@ -896,6 +1051,8 @@ async function handlePdfSubmit() {
   fd.append('so_ky_hieu',      soKyHieu);
   fd.append('loai_van_ban',    loaiVanBan);
   fd.append('nguon_thu_thap',  nguonThuThap);
+  fd.append('primary_keyword_ids',   primaryIds.join(','));
+  fd.append('secondary_keyword_ids', secondaryIds.join(','));
 
   try {
     const res  = await fetch('/import_law', { method: 'POST', body: fd });

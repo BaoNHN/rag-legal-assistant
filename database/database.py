@@ -7,6 +7,16 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # database/ → root
 DB_NAME  = os.path.join(BASE_DIR, "chat.db")
 
+# keyword.status — one column, two independent purposes (see init_db()'s
+# `keyword` table comment): a "scoring" keyword (source_keyword tagging,
+# _score_doc() boost) or an "out-of-scope" keyword (engine.rag_engine.
+# _is_out_of_scope()'s blocklist, formerly the hardcoded OUT_OF_SCOPE_KEYWORDS
+# Python constant). Even values = active, odd = disabled.
+KEYWORD_STATUS_ACTIVE       = 0  # scoring keyword, selectable for tagging
+KEYWORD_STATUS_DISABLED     = 1  # scoring keyword, hidden from picker
+KEYWORD_STATUS_OOS_ACTIVE   = 2  # out-of-scope keyword, currently blocking
+KEYWORD_STATUS_OOS_DISABLED = 3  # out-of-scope keyword, currently not blocking
+
 
 def get_conn():
     return sqlite3.connect(DB_NAME)
@@ -150,6 +160,115 @@ def init_db():
             content TEXT
         )
     """)
+
+    # ── keyword (admin-managed scoring keywords — replaces hardcoded topic
+    # lists in engine.rag_engine._score_doc so newly-imported law sources can
+    # get the same relevance boosts as curated content without a code change)
+    # status: 0 = active (selectable when tagging a source), 1 = disabled
+    # (kept, never hard-deleted — deleting could orphan source_keyword rows
+    # pointing at chunks still indexed in chroma_db)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS keyword (
+            id     INTEGER PRIMARY KEY AUTOINCREMENT,
+            name   TEXT UNIQUE NOT NULL,
+            status INTEGER DEFAULT 0
+        )
+    """)
+
+    # ── source_keyword (which keywords are tagged to which source, and
+    # whether each tag is primary or secondary). Keyed by (source_type,
+    # source_key) rather than per-chunk since that's how each import type is
+    # already grouped for the admin UI:
+    #   source_type='law'      source_key=so_ky_hieu     (list_indexed_sources)
+    #   source_type='dataset'  source_key=source_file    (list_dataset_sources)
+    #   source_type='scenario' source_key=nguon_thu_thap (list_scenario_sources)
+    # A 2-part generic key (instead of one column per import type) means a
+    # future 4th import type needs no schema change — avoids rewriting every
+    # chunk's chroma metadata whenever an admin edits a source's keywords.
+    #
+    # Migration: source_keyword originally shipped keyed by so_ky_hieu only
+    # (law sources exclusively, this feature's first iteration). Any table
+    # from that iteration is renamed, its rows migrated in as source_type=
+    # 'law', then dropped — before the generalized CREATE TABLE below.
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='source_keyword'")
+    if c.fetchone():
+        c.execute("PRAGMA table_info(source_keyword)")
+        existing_cols = {row[1] for row in c.fetchall()}
+        if "source_type" not in existing_cols:
+            c.execute("ALTER TABLE source_keyword RENAME TO source_keyword_legacy")
+            c.execute("""
+                CREATE TABLE source_keyword (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_type TEXT NOT NULL,
+                    source_key  TEXT NOT NULL,
+                    keyword_id  INTEGER NOT NULL,
+                    kind        TEXT NOT NULL,
+                    UNIQUE(source_type, source_key, keyword_id)
+                )
+            """)
+            c.execute("""
+                INSERT INTO source_keyword (source_type, source_key, keyword_id, kind)
+                SELECT 'law', so_ky_hieu, keyword_id, kind FROM source_keyword_legacy
+            """)
+            c.execute("DROP TABLE source_keyword_legacy")
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS source_keyword (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            source_key  TEXT NOT NULL,
+            keyword_id  INTEGER NOT NULL,
+            kind        TEXT NOT NULL,
+            UNIQUE(source_type, source_key, keyword_id)
+        )
+    """)
+
+    # Seed a starting keyword set drawn from
+    # Danh_muc_van_ban_duoi_luat_Luat_Doanh_nghiep_Luat_Thuong_mai.docx so the
+    # admin has something to tag sources with immediately — only runs once
+    # (idempotent, same pattern as the default-account seed above).
+    c.execute("SELECT COUNT(*) FROM keyword")
+    if c.fetchone()[0] == 0:
+        _seed_keywords = [
+            "đăng ký doanh nghiệp", "hộ kinh doanh", "doanh nghiệp nhà nước",
+            "sở hữu chéo", "chứng khoán", "trái phiếu doanh nghiệp",
+            "đầu tư nước ngoài", "thuế và hóa đơn điện tử",
+            "lao động và bảo hiểm xã hội", "phá sản", "cạnh tranh",
+            "xúc tiến thương mại", "khuyến mại", "quảng cáo thương mại",
+            "hội chợ triển lãm thương mại", "kinh doanh dịch vụ logistics",
+            "nhượng quyền thương mại", "sở giao dịch hàng hóa",
+            "giám định thương mại", "văn phòng đại diện thương nhân nước ngoài",
+            "chi nhánh thương nhân nước ngoài", "thương mại điện tử",
+            "xử phạt vi phạm hành chính thương mại",
+            "chuyển đổi loại hình doanh nghiệp", "quản lý vốn nhà nước tại doanh nghiệp",
+        ]
+        c.executemany(
+            "INSERT OR IGNORE INTO keyword (name, status) VALUES (?, 0)",
+            [(k,) for k in _seed_keywords]
+        )
+
+    # Seed the out-of-scope blocklist (formerly the hardcoded
+    # OUT_OF_SCOPE_KEYWORDS Python constant in engine/rag_engine.py) — moved
+    # into the same admin-editable keyword table so admins can add/disable
+    # blocking terms without a code change, same rationale as the scoring
+    # keywords above. Runs once, independent of the scoring-keyword seed gate
+    # (keyed on whether any status=2/3 row exists yet, not total row count).
+    # "nhà đất" added here — missing from the original hardcoded list (found
+    # 2026-07-28: "Thủ tục mua bán nhà đất..." slipped through the filter).
+    c.execute("SELECT COUNT(*) FROM keyword WHERE status IN (2, 3)")
+    if c.fetchone()[0] == 0:
+        _seed_out_of_scope_keywords = [
+            "ly hôn", "li hôn", "hôn nhân", "gia đình", "ly thân", "kết hôn",
+            "hình sự", "tội phạm", "khởi tố", "bắt giữ", "truy tố", "tù giam",
+            "đất đai", "nhà ở", "nhà đất", "bất động sản", "quyền sử dụng đất",
+            "bảo hiểm xã hội", "bảo hiểm y tế", "tai nạn lao động",
+            "thuế thu nhập cá nhân", "thuế giá trị gia tăng", "thuế tiêu thụ",
+            "hải quan", "xuất nhập khẩu", "hành chính công",
+        ]
+        c.executemany(
+            "INSERT OR IGNORE INTO keyword (name, status) VALUES (?, 2)",
+            [(k,) for k in _seed_out_of_scope_keywords]
+        )
 
     conn.commit()
     conn.close()
@@ -467,3 +586,174 @@ def change_user_password(username: str, old_password: str, new_password: str):
     conn.commit()
     conn.close()
     return True, ""
+
+
+# =========================
+# KEYWORD (admin-managed scoring keywords — see engine.rag_engine._score_doc)
+# =========================
+def create_keyword(name: str, is_out_of_scope: bool = False):
+    """Creates a new active keyword — a scoring keyword (status=0, the
+    default) or an out-of-scope blocklist entry (status=2, is_out_of_scope=True).
+    Returns its id, or None if the name already exists (one shared unique
+    name namespace across both kinds — a name can't be both at once)."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    status = KEYWORD_STATUS_OOS_ACTIVE if is_out_of_scope else KEYWORD_STATUS_ACTIVE
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    try:
+        c.execute("INSERT INTO keyword (name, status) VALUES (?, ?)", (name, status))
+        conn.commit()
+        return c.lastrowid
+    except sqlite3.IntegrityError:
+        return None
+    finally:
+        conn.close()
+
+
+def get_all_keywords() -> list:
+    """Every keyword of every kind/status — for the admin 'Từ khóa' tab
+    (scoring + out-of-scope, active + disabled; the UI derives "Loại" from
+    status < 2 vs >= 2 and "Trạng thái" from status being even vs odd)."""
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute("SELECT id, name, status FROM keyword ORDER BY name ASC").fetchall()
+    conn.close()
+    return [{"id": r[0], "name": r[1], "status": int(r[2] or 0)} for r in rows]
+
+
+def get_active_keywords() -> list:
+    """Active scoring keywords only (status=0) — for the tag-picker <select>
+    when tagging a source. Disabled and out-of-scope keywords must not be
+    selectable for new source tags."""
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        "SELECT id, name FROM keyword WHERE status=0 ORDER BY name ASC"
+    ).fetchall()
+    conn.close()
+    return [{"id": r[0], "name": r[1]} for r in rows]
+
+
+def get_active_out_of_scope_keywords() -> list:
+    """Active out-of-scope blocklist phrases (status=2) — used by
+    engine.rag_engine._is_out_of_scope() in place of the old hardcoded
+    OUT_OF_SCOPE_KEYWORDS Python constant (still kept there as a fallback if
+    this DB read ever fails)."""
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        "SELECT name FROM keyword WHERE status=2 ORDER BY name ASC"
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def get_or_create_keyword(name: str) -> int:
+    """Looks up a keyword by exact name, creating it (active) if missing.
+    Used by Dataset/Scenario imports to auto-tag from their own curated
+    retrieval_keywords / "Từ khóa" fields instead of a manual picker — those
+    phrases won't generally already exist in the admin-seeded keyword list."""
+    name = (name or "").strip()
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    row  = c.execute("SELECT id FROM keyword WHERE name=?", (name,)).fetchone()
+    if row:
+        conn.close()
+        return row[0]
+
+    c.execute("INSERT INTO keyword (name, status) VALUES (?, 0)", (name,))
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def set_keyword_status(keyword_id: int, status: int):
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute("UPDATE keyword SET status=? WHERE id=?", (status, keyword_id))
+    conn.commit()
+    conn.close()
+
+
+def get_source_keywords(source_type: str, source_key: str) -> dict:
+    """{"primary": [{id,name}, ...], "secondary": [...]} for one source
+    (source_type: 'law'|'dataset'|'scenario', source_key: so_ky_hieu /
+    source_file / nguon_thu_thap respectively — see init_db()'s comment on
+    source_keyword for the mapping). Deliberately not filtered by
+    keyword.status — a keyword already tagged to a source stays tagged (and
+    keeps scoring) even after being disabled; disabling only removes it from
+    the picker for *new* tags."""
+    source_key = (source_key or "").strip()
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        """
+        SELECT k.id, k.name, sk.kind
+        FROM source_keyword sk
+        JOIN keyword k ON k.id = sk.keyword_id
+        WHERE sk.source_type = ? AND sk.source_key = ?
+        ORDER BY k.name ASC
+        """,
+        (source_type, source_key)
+    ).fetchall()
+    conn.close()
+    result = {"primary": [], "secondary": []}
+    for kid, name, kind in rows:
+        bucket = "primary" if kind == "primary" else "secondary"
+        result[bucket].append({"id": kid, "name": name})
+    return result
+
+
+def set_source_keywords(source_type: str, source_key: str, primary_ids: list, secondary_ids: list):
+    """Replaces all keyword tags for one source in one shot (delete-then-
+    insert — simpler than diffing, and this table is small per source)."""
+    source_key = (source_key or "").strip()
+    if not source_key:
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute("DELETE FROM source_keyword WHERE source_type=? AND source_key=?", (source_type, source_key))
+
+    seen = set()
+    for kid in (primary_ids or []):
+        if kid in seen:
+            continue
+        seen.add(kid)
+        c.execute(
+            "INSERT INTO source_keyword (source_type, source_key, keyword_id, kind) VALUES (?,?,?,?)",
+            (source_type, source_key, kid, "primary")
+        )
+    for kid in (secondary_ids or []):
+        if kid in seen:
+            continue
+        seen.add(kid)
+        c.execute(
+            "INSERT INTO source_keyword (source_type, source_key, keyword_id, kind) VALUES (?,?,?,?)",
+            (source_type, source_key, kid, "secondary")
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def get_source_keywords_map() -> dict:
+    """{source_type: {source_key: {"primary": {name, ...}, "secondary": {name, ...}}}}
+    for every tagged source — one bulk load per ask_rag() call, used by
+    engine.rag_engine._score_doc() to boost sources whose admin-tagged
+    keywords match the question. Small table, no caching needed."""
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        """
+        SELECT sk.source_type, sk.source_key, k.name, sk.kind
+        FROM source_keyword sk
+        JOIN keyword k ON k.id = sk.keyword_id
+        """
+    ).fetchall()
+    conn.close()
+
+    result = {}
+    for source_type, source_key, name, kind in rows:
+        by_key = result.setdefault(source_type, {})
+        bucket = by_key.setdefault(source_key, {"primary": set(), "secondary": set()})
+        bucket["primary" if kind == "primary" else "secondary"].add(name.lower())
+    return result

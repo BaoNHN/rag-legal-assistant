@@ -300,7 +300,8 @@ def _extract_text_docx(docx_path: str) -> dict:
 # ── Main background job ───────────────────────────────────────────────────────
 def run_import(job_id: str, file_path: str, so_ky_hieu: str,
                loai_van_ban: str, nguon_thu_thap: str,
-               student_id: int, db_conn_factory, importer: str = "admin1"):
+               student_id: int, db_conn_factory, importer: str = "admin1",
+               primary_keyword_ids: list = None, secondary_keyword_ids: list = None):
     """
     Full pipeline: auto-detect file type (PDF / DOCX) → extract text or OCR →
     segment → embed → add to ChromaDB (no wipe).
@@ -460,6 +461,13 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
         # citable immediately (see engine.rag_engine.refresh_citation_sources).
         from engine.rag_engine import refresh_citation_sources
         refresh_citation_sources()
+
+        # Tag this so_ky_hieu with its admin/teacher-selected keywords (see
+        # database.database.keyword / source_keyword) — written unconditionally,
+        # even when every chunk was skipped as a duplicate, so re-submitting an
+        # already-imported so_ky_hieu can still be used just to update its tags.
+        from database.database import set_source_keywords
+        set_source_keywords("law", so_ky_hieu, primary_keyword_ids or [], secondary_keyword_ids or [])
 
         _set_job(job_id, status="done", message=result_msg)
 
