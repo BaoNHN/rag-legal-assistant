@@ -25,6 +25,14 @@ body {
     flex-direction: column;
     z-index: 100;     /* ensures sidebar is always clickable */
     position: relative;
+    overflow: hidden;
+    transition: width .2s ease, min-width .2s ease;
+}
+
+.sidebar.collapsed {
+    width: 0;
+    min-width: 0;
+    border: none;
 }
 
 .sidebar-header {
@@ -126,9 +134,37 @@ body {
 .header {
     background-color: #6200EA;
     color: white;
-    padding: 16px;
-    text-align: center;
-    font-size: 24px;
+    padding: 12px 20px;
+    font-size: 18px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.header-left,
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.header-btn {
+    background: rgba(255,255,255,0.12);
+    border: none;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: background .18s;
+}
+
+.header-btn:hover {
+    background: rgba(255,255,255,0.24);
 }
 
 /* Wraps chatbox + input */
@@ -136,20 +172,28 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
+    justify-content: center;
     width: 100%;
     margin: 0;
     background-color: white;
     min-height: 0;
 }
 
+.container.is-chatting {
+    justify-content: flex-start;
+}
+
 /* ── Welcome screen ─────────────────────────────── */
+/* Not flex:1 anymore — sits at natural height so it + the input bar right
+   below it form one block that .container centers vertically as a group
+   (hero-style, input bar following the greeting instead of pinned to the
+   page bottom). Hidden entirely once chatting (rule below). */
 #welcome-screen {
-    flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding-bottom: 40px;
+    padding-bottom: 24px;
 }
 
 .welcome-title {
@@ -259,6 +303,15 @@ body {
     align-items: center;
 }
 
+.container:not(.is-chatting) .input-area {
+    max-width: 640px;
+    width: 90%;
+    margin: 0 auto;
+    border-top: none;
+    background: transparent;
+    padding: 0;
+}
+
 .input-area input {
     flex: 1;
     padding: 10px;
@@ -266,6 +319,13 @@ body {
     border-radius: 20px;
     margin-right: 10px;
     transition: border-color 0.3s;
+}
+
+.container:not(.is-chatting) .input-area input {
+    padding: 16px 20px;
+    border-radius: 999px;
+    font-size: 15px;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.08);
 }
 
 .input-area input:focus {
@@ -282,6 +342,11 @@ body {
     cursor: pointer;
     display: flex;
     align-items: center;
+}
+
+.container:not(.is-chatting) .input-area button {
+    padding: 14px 22px;
+    border-radius: 999px;
 }
 
 .input-area button:hover {

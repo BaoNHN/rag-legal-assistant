@@ -102,7 +102,7 @@
 <body>
 <div class="layout">
   <!-- SIDEBAR -->
-  <aside class="sidebar">
+  <aside class="sidebar collapsed">
     <div class="sidebar-header">
       <button class="new-chat">+ Đoạn chat mới</button>
       <!-- Import Law button — shown for teachers & admins via JS -->
@@ -123,10 +123,15 @@
 
   <main class="chat-container">
     <div class="header">
-      Chat Assistant
-      <span id="roleBadge"></span>
-      <button onclick="logout()" style="float:right;background:rgba(255,255,255,0.1);border:none;color:white;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;">Đăng xuất</button>
-      <button id="voiceToggle" onclick="toggleVoice()" title="Chuyển đổi giọng trả lời" style="float:right;background:rgba(255,255,255,0.1);border:none;color:white;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;margin-right:8px;"></button>
+      <div class="header-left">
+        <button id="sidebarToggle" class="header-btn" onclick="toggleSidebar()" title="Ẩn/hiện danh sách chat">☰</button>
+        <span>Chat Assistant</span>
+        <span id="roleBadge"></span>
+      </div>
+      <div class="header-right">
+        <button id="voiceToggle" class="header-btn" onclick="toggleVoice()" title="Chuyển đổi giọng trả lời"></button>
+        <button class="header-btn" onclick="logout()">Đăng xuất</button>
+      </div>
     </div>
     <div class="container" id="mainContainer">
 
@@ -163,6 +168,12 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/material-design-icons/3.0.1/iconfont/material-icons.css"/>
 <script src="/static/script.js"></script>
 <script>
+// Sidebar always starts closed on page load — opens only when the user
+// clicks the toggle (no cross-reload memory).
+function toggleSidebar() {
+  document.querySelector('.sidebar').classList.toggle('collapsed');
+}
+
 // Show Import Law / Manage Account buttons and role badge based on role
 (async function() {
   try {
