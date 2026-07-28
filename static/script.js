@@ -19,9 +19,11 @@ const NOTIFICATION_CHAT_TITLE = "Thông báo";
 let currentVoice = localStorage.getItem("voice") || "formal";
 
 function updateVoiceButton() {
-    const btn = document.getElementById("voiceToggle");
-    if (!btn) return;
-    btn.textContent = currentVoice === "casual" ? "😊 Đời thường" : "🎓 Nghiêm túc";
+    const checkbox = document.getElementById("voiceToggleInput");
+    const label = document.getElementById("voiceToggleLabel");
+    if (!checkbox || !label) return;
+    checkbox.checked = currentVoice === "casual";
+    label.textContent = currentVoice === "casual" ? "😊 Đời thường" : "🎓 Nghiêm túc";
 }
 
 function toggleVoice() {

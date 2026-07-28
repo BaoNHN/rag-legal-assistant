@@ -39,61 +39,107 @@ body {
 }
 
 .sidebar-header {
-    padding: 12px 15px 15px;
+    /* Extra top padding reserves room for the fixed icon toggle button
+       (top:12px, ~38px) that sits over this corner while the sidebar is
+       open, so the brand text/"+ Đoạn chat mới" don't render underneath it. */
+    padding: 62px 15px 15px;
     border-bottom: 1px solid #3f3f46;
 }
 
-/* ── Sidebar collapse/expand toggle — ChatGPT-style icon button ──
-   One copy lives inside the sidebar (top-right of the panel, visible while
-   open); a floating twin sits fixed at the top-left of the viewport and is
-   only shown once the sidebar has collapsed, so a way to reopen it is always
-   on screen (matches vd_sidebar.png reference). */
-.sidebar-toggle-row {
+/* Plain text, styled like the header's "Chat Assistant" title — only lives
+   inside the (open) sidebar, not fixed/floating. */
+/* Fixed top-left, always visible — same position whether the sidebar is
+   open or collapsed, and for guests too (no icon precedes it then, see
+   --no-icon). Solid pill background (not just colored text) so white text
+   stays readable regardless of what's behind it (dark sidebar vs. white
+   page content) without needing to flip colors per state. */
+/* Wraps the label + role badge as one unit, fixed top-left, so the badge
+   always sits right next to the label instead of off in the header. Slides
+   along with the sidebar's own width transition (same duration/easing as
+   .sidebar's "transition: width .2s ease") so it moves in sync rather than
+   teleporting between positions. */
+.floating-brand-group {
     display: flex;
-    justify-content: flex-start;
-    margin-bottom: 10px;
-}
-
-.icon-toggle-btn {
-    background: transparent;
-    border: none;
-    color: #cfcfcf;
-    width: 32px;
-    height: 32px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 15px;
-    display: flex;
+    position: fixed;
+    top: 12px;
+    left: 62px;
+    z-index: 300;
     align-items: center;
-    justify-content: center;
+    gap: 10px;
+    transition: left .2s ease;
 }
 
-.icon-toggle-btn:hover {
-    background: rgba(255,255,255,0.1);
+/* Sidebar off (collapsed): stay right next to the fixed toggle icon.
+   Sidebar on (open): slide to sit just past the now-open sidebar's edge,
+   near the sidebar itself rather than the toggle button. */
+.layout.sidebar-collapsed .floating-brand-group {
+    left: 62px;
+}
+
+.layout:not(.sidebar-collapsed) .floating-brand-group {
+    left: 274px;
+}
+
+/* Guests: no icon precedes the group, and their sidebar is permanently
+   collapsed (no toggle to open it), so this position never needs to slide. */
+.floating-brand-group--no-icon {
+    left: 14px;
+}
+
+.floating-brand-label {
+    display: flex;
+    height: 38px;
+    align-items: center;
+    padding: 0 16px;
+    border-radius: 999px;
+    background: #6200EA;
+    font-size: 22px;
+    font-weight: 700;
     color: white;
+    white-space: nowrap;
 }
 
+/* ── Sidebar toggle — icon-only, always visible at a fixed screen position
+   (top-left), regardless of open/collapsed state. Logged-in users only. */
 .floating-toggle {
-    display: none;
+    display: flex;
     position: fixed;
     top: 12px;
     left: 14px;
     z-index: 300;
+    align-items: center;
+    justify-content: center;
     width: 38px;
     height: 38px;
-    font-size: 19px;
+    border-radius: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+    font-size: 17px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+/* Sidebar collapsed: button sits over the white main content — solid purple
+   pops there. Sidebar open: button sits over the dark sidebar (#202123) —
+   inverted to white-on-purple-outline so it still pops instead of blending
+   into the dark background. */
+.layout.sidebar-collapsed .floating-toggle {
     background: #6200EA;
     border: 1.5px solid white;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
     color: white;
 }
 
-.floating-toggle:hover {
+.layout.sidebar-collapsed .floating-toggle:hover {
     background: #7A2BF0;
 }
 
-.layout.sidebar-collapsed .floating-toggle {
-    display: flex;
+.layout:not(.sidebar-collapsed) .floating-toggle {
+    background: white;
+    border: 1.5px solid #6200EA;
+    color: #6200EA;
+}
+
+.layout:not(.sidebar-collapsed) .floating-toggle:hover {
+    background: #F0E6FE;
 }
 
 .new-chat {
@@ -190,18 +236,39 @@ body {
 .header {
     background-color: #6200EA;
     color: white;
-    /* Extra left padding permanently reserves room for the floating sidebar
-       toggle (fixed, left:14px/width:38px) so header text never sits under
-       it, whether the sidebar is open or collapsed. */
-    padding: 18px 24px 18px 66px;
+    /* Explicit height (not padding-driven) because header-left/header-right
+       are now empty — their content moved into the fixed-position groups —
+       and header-center was pulled out of the grid entirely (position:fixed
+       for viewport centering), so nothing was left to size the row and the
+       header collapsed down to near-zero height. Matches .header-center's
+       height so both line up. */
+    height: 65px;
+    /* Left padding reserves room for the fixed toggle icon + sliding
+       "⚖️ RAG Legal Assistant" pill so header-left content never sits under
+       it — the exact amount needed changes as the label slides (see the
+       two state rules below), animated with the same timing so the header
+       and the label move in sync. Right padding reserves room for the fixed
+       voice-switch + login/logout group (.floating-right-group), which
+       doesn't move, so a single static value is enough. Grid (not flex) so
+       the center zone stays truly centered regardless of how much content
+       the left/right zones hold. */
+    padding: 0 300px 0 380px;
     font-size: 21px;
     font-weight: 600;
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: nowrap;
     gap: 16px;
     overflow-x: auto;
+    transition: padding-left .2s ease;
+}
+
+.layout.sidebar-collapsed .header {
+    padding-left: 380px;
+}
+
+.layout:not(.sidebar-collapsed) .header {
+    padding-left: 600px;
 }
 
 .header-left,
@@ -209,6 +276,34 @@ body {
     display: flex;
     align-items: center;
     gap: 10px;
+}
+
+.header-left {
+    justify-content: flex-start;
+}
+
+/* Locked to the viewport's horizontal center, not the grid's "auto" column —
+   position:fixed removes it from the header's grid flow entirely, so it
+   never shifts when the header's padding/left-column content changes (e.g.
+   the sidebar toggling open/closed). */
+.header-center {
+    position: fixed;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 60px;
+    display: flex;
+    align-items: center;
+    z-index: 250;
+    font-size: 21px;
+    font-weight: 600;
+    color: white;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.header-right {
+    justify-content: flex-end;
 }
 
 .header-btn {
@@ -232,6 +327,76 @@ body {
    out from the plain translucent buttons next to it. */
 #loginBtn, #logoutBtn {
     border: 1.5px solid rgba(255,255,255,0.9);
+    /* ~1.3x the base .header-btn size (padding 9px 18px / font 14px) */
+    padding: 12px 23px;
+    font-size: 18px;
+}
+
+/* Mirrors .floating-brand-group on the opposite corner — fixed top-right,
+   holding the voice switch + login/logout, same treatment as the top-left
+   ⚖️ RAG Legal Assistant / role badge group. */
+.floating-right-group {
+    display: flex;
+    position: fixed;
+    top: 12px;
+    right: 14px;
+    z-index: 300;
+    align-items: center;
+    gap: 14px;
+}
+
+/* ── Voice toggle — iOS-style switch instead of a plain button ── */
+.voice-switch {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    cursor: pointer;
+    user-select: none;
+    background: rgba(255,255,255,0.12);
+    border: 1.5px solid rgba(255,255,255,0.9);
+    border-radius: 999px;
+    padding: 8px 16px;
+}
+
+.voice-switch input {
+    display: none;
+}
+
+.voice-switch-track {
+    position: relative;
+    flex-shrink: 0;
+    width: 40px;
+    height: 22px;
+    background: rgba(255,255,255,0.35);
+    border-radius: 999px;
+    transition: background .2s;
+}
+
+.voice-switch-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    background: white;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    transition: left .2s;
+}
+
+.voice-switch input:checked ~ .voice-switch-track {
+    background: #34C759;
+}
+
+.voice-switch input:checked ~ .voice-switch-track .voice-switch-knob {
+    left: 20px;
+}
+
+.voice-switch-label {
+    font-size: 15px;
+    font-weight: 500;
+    color: white;
+    white-space: nowrap;
 }
 
 /* Wraps chatbox + input */

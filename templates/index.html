@@ -100,21 +100,18 @@
   </style>
 </head>
 <body>
-<div class="layout sidebar-collapsed" id="layoutRoot">
+<div class="layout{% if is_guest %} sidebar-collapsed{% endif %}" id="layoutRoot">
   <!-- SIDEBAR — guests get no toggle at all (server-side gated, not just
        hidden by JS after the fact): there's nothing in it worth opening
        (no saved chat history for an unauthenticated, never-persisted
        session), and gating it here avoids any flash-of-the-wrong-state
        before session_info's async fetch resolves. -->
   <aside class="sidebar">
+    <!-- Top strip left empty on purpose — the fixed icon toggle button below
+         sits directly over this corner while the sidebar is open
+         (sidebar-header's extra top padding, see style.css, reserves room
+         for it). -->
     <div class="sidebar-header">
-      {% if not is_guest %}
-      <div class="sidebar-toggle-row">
-        <button class="icon-toggle-btn" onclick="toggleSidebar()" title="Ẩn danh sách chat">
-          <i class="fa-solid fa-table-columns"></i>
-        </button>
-      </div>
-      {% endif %}
       <button class="new-chat">+ Đoạn chat mới</button>
       <!-- Import Law button — shown for teachers & admins via JS -->
       <a href="/import" class="btn-import-law" id="importLawBtn">
@@ -132,26 +129,48 @@
     <div class="sidebar-chats" id="chat-list"></div>
   </aside>
 
+  <!-- "⚖️ RAG Legal Assistant" + role badge — fixed top-left as one group so
+       the badge always sits right next to the label, sliding together.
+       The icon toggle next to it only exists for logged-in users (guests
+       have no sidebar to toggle), so the group sits closer to the corner
+       when there's no icon. -->
   {% if not is_guest %}
-  <!-- Reopen button — only visible while the sidebar is collapsed. Distinct
-       ⚖️ icon (vs. the fa-table-columns icon used inside the open sidebar)
-       so it reads as "open the legal assistant", not a generic UI control. -->
-  <button id="sidebarToggleFloating" class="icon-toggle-btn floating-toggle" onclick="toggleSidebar()" title="Hiện danh sách chat">
-    ⚖️
+  <button id="sidebarToggleFloating" class="floating-toggle" onclick="toggleSidebar()" title="Ẩn/hiện danh sách chat">
+    <i class="fa-solid fa-table-columns"></i>
   </button>
+  <div class="floating-brand-group">
+    <span class="floating-brand-label">⚖️ RAG Legal Assistant</span>
+    <span id="roleBadge"></span>
+  </div>
+  {% else %}
+  <div class="floating-brand-group floating-brand-group--no-icon">
+    <span class="floating-brand-label">⚖️ RAG Legal Assistant</span>
+    <span id="roleBadge"></span>
+  </div>
   {% endif %}
+
+  <!-- Mirrors the top-left ⚖️ RAG Legal Assistant / role badge group — same
+       fixed-top-right treatment for voice toggle + login/logout. -->
+  <div class="floating-right-group">
+    <label class="voice-switch" title="Chuyển đổi giọng trả lời">
+      <input type="checkbox" id="voiceToggleInput" onchange="toggleVoice()"/>
+      <span class="voice-switch-track"><span class="voice-switch-knob"></span></span>
+      <span class="voice-switch-label" id="voiceToggleLabel">🎓 Nghiêm túc</span>
+    </label>
+    <a href="/login" id="loginBtn" class="header-btn" style="display:none;text-decoration:none;">Đăng nhập</a>
+    <button id="logoutBtn" class="header-btn" onclick="logout()">Đăng xuất</button>
+  </div>
 
   <main class="chat-container">
     <div class="header">
-      <div class="header-left">
-        <span>Chat Assistant</span>
-        <span id="roleBadge"></span>
+      <div class="header-left"></div>
+      <!-- Fixed to the viewport center (see style.css), not the grid's
+           "auto" column — stays dead-center regardless of the sidebar
+           state changing padding/left-column content. -->
+      <div class="header-center">
+        Chat Assistant
       </div>
-      <div class="header-right">
-        <button id="voiceToggle" class="header-btn" onclick="toggleVoice()" title="Chuyển đổi giọng trả lời"></button>
-        <a href="/login" id="loginBtn" class="header-btn" style="display:none;text-decoration:none;">Đăng nhập</a>
-        <button id="logoutBtn" class="header-btn" onclick="logout()">Đăng xuất</button>
-      </div>
+      <div class="header-right"></div>
     </div>
     <div class="container" id="mainContainer">
 
@@ -189,11 +208,13 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/material-design-icons/3.0.1/iconfont/material-icons.css"/>
 <script src="/static/script.js?v={{ static_version }}"></script>
 <script>
-// Sidebar always starts closed on page load — opens only when the user
-// clicks the toggle (no cross-reload memory). Collapse state lives on
-// #layoutRoot (see style.css .layout.sidebar-collapsed), not on .sidebar
-// itself, so the floating reopen button (a sibling of .sidebar) can react
-// to the same class.
+// Default open/closed state is set server-side (is_guest in app.py's / route
+// controls the initial "sidebar-collapsed" class on #layoutRoot below) — open
+// by default for logged-in users, permanently collapsed for guests (who have
+// no toggle button at all, see the is_guest Jinja guards above).
+// Collapse state lives on #layoutRoot, not on .sidebar itself, so the
+// floating reopen button (a sibling of .sidebar) can react to the same
+// class.
 function toggleSidebar() {
   document.getElementById('layoutRoot').classList.toggle('sidebar-collapsed');
 }
