@@ -133,9 +133,9 @@ body {
 }
 
 .layout:not(.sidebar-collapsed) .floating-toggle {
-    background: white;
+    background: black;
     border: 1.5px solid #6200EA;
-    color: #6200EA;
+    color: white;
 }
 
 .layout:not(.sidebar-collapsed) .floating-toggle:hover {
