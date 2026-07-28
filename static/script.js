@@ -30,12 +30,12 @@ function toggleVoice() {
     updateVoiceButton();
 }
 
-// ── Lock/unlock the input bar (used for the read-only "Thông báo" chat) ──
-function setInputLocked(locked) {
+// ── Lock/unlock the input bar (read-only "Thông báo" chat, or message cap hit) ──
+function setInputLocked(locked, reason) {
     chatInput.disabled = locked;
     sendButton.disabled = locked;
     chatInput.placeholder = locked
-        ? `Đoạn chat '${NOTIFICATION_CHAT_TITLE}' chỉ để xem, không thể gửi tin nhắn.`
+        ? (reason || `Đoạn chat '${NOTIFICATION_CHAT_TITLE}' chỉ để xem, không thể gửi tin nhắn.`)
         : "Nhập câu hỏi về Luật Doanh nghiệp…";
 }
 
@@ -201,43 +201,48 @@ sendButton.addEventListener('click', async () => {
     if (!message) return;
 
     try {
-        // 1️⃣ Ensure chat exists
-        if (!currentChatId) {
-            await createNewChat();
-            // createNewChat() bails out (leaving currentChatId unset) when the
-            // 5-chat cap is hit and shows a picker instead — stop here so the
-            // message isn't sent against a nonexistent chat.
-            if (!currentChatId) return;
-        }
+        // Guests get one ephemeral, never-persisted chat (chat_id stays
+        // null) — skip chat creation/rename entirely, /get handles the
+        // per-session message cap itself (see app.py).
+        if (!window.isGuest) {
+            // 1️⃣ Ensure chat exists
+            if (!currentChatId) {
+                await createNewChat();
+                // createNewChat() bails out (leaving currentChatId unset) when the
+                // 5-chat cap is hit and shows a picker instead — stop here so the
+                // message isn't sent against a nonexistent chat.
+                if (!currentChatId) return;
+            }
 
-        // 2️⃣ Ensure memory exists (🔥 FIX crash)
-        if (!chats[currentChatId]) {
-            chats[currentChatId] = [];
-        }
+            // 2️⃣ Ensure memory exists (🔥 FIX crash)
+            if (!chats[currentChatId]) {
+                chats[currentChatId] = [];
+            }
 
-        // 3️⃣ Save user message
-        chats[currentChatId].push({ role: "user", text: message });
+            // 3️⃣ Save user message
+            chats[currentChatId].push({ role: "user", text: message });
 
-        // 4️⃣ Auto rename chat
-        const chatElem = document.querySelector(`.chat-item[data-id="${currentChatId}"]`);
-        if (chatElem) {
-            const titleElem = chatElem.querySelector(".chat-title");
+            // 4️⃣ Auto rename chat
+            const chatElem = document.querySelector(`.chat-item[data-id="${currentChatId}"]`);
+            if (chatElem) {
+                const titleElem = chatElem.querySelector(".chat-title");
 
-            if (titleElem && titleElem.innerText === "Đoạn chat mới") {
-                const newName = message.slice(0, 20);
+                if (titleElem && titleElem.innerText === "Đoạn chat mới") {
+                    const newName = message.slice(0, 20);
 
-                const renameRes  = await fetch("/rename_chat", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        chat_id: currentChatId,
-                        title: newName
-                    })
-                });
-                const renameData = await renameRes.json();
+                    const renameRes  = await fetch("/rename_chat", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            chat_id: currentChatId,
+                            title: newName
+                        })
+                    });
+                    const renameData = await renameRes.json();
 
-                if (renameData.status !== "error") {
-                    renameChat(currentChatId, newName);
+                    if (renameData.status !== "error") {
+                        renameChat(currentChatId, newName);
+                    }
                 }
             }
         }
@@ -263,6 +268,9 @@ sendButton.addEventListener('click', async () => {
         // 9️⃣ Handle response
         if (data && data.status === "success") {
             displayMessage(data.text, false);
+        } else if (data && data.status === "limit") {
+            displayMessage(data.text, false);
+            setInputLocked(true, "Đã đạt giới hạn số câu hỏi cho đoạn chat này.");
         } else {
             displayMessage(data?.text || "❌ Lỗi không xác định", false);
         }
@@ -298,6 +306,7 @@ async function createNewChat() {
 
     clearChatbox();
     enterWelcomeMode();
+    setInputLocked(false);
 }
 
 // ── Chat-limit picker: shown when /create_chat returns 409 (5-chat cap hit).

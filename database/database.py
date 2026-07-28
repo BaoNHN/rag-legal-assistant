@@ -335,6 +335,10 @@ def get_const(name: str) -> str:
 NOTIFICATION_CHAT_TITLE = "Thông báo"
 MAX_CHATS_PER_USER = 5
 NOTIFICATION_KEEP_LATEST = 5
+# Per-chat cap on user turns (question/answer pairs) — applies equally to
+# logged-in chats (counted in messages) and guest sessions (counted in the
+# signed session cookie, never written to chat.db). See app.py's /get route.
+MAX_MESSAGES_PER_CHAT = 15
 
 
 # =========================
@@ -455,6 +459,17 @@ def get_messages(chat_id):
     rows = c.fetchall()
     conn.close()
     return [{"role": r[0], "text": r[1]} for r in rows]
+
+
+def count_user_messages(chat_id) -> int:
+    """Number of user turns already sent in this chat — used to enforce
+    MAX_MESSAGES_PER_CHAT."""
+    conn = sqlite3.connect(DB_NAME)
+    c    = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM messages WHERE chat_id=? AND role='user'", (chat_id,))
+    count = c.fetchone()[0]
+    conn.close()
+    return count
 
 
 def delete_chat(chat_id: str):

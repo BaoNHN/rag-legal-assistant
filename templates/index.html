@@ -97,6 +97,11 @@
       color: #D63B3B;
       border: 1.5px solid #D63B3B;
     }
+    .role-badge.guest {
+      background: whitesmoke;
+      color: #616161;
+      border: 1.5px solid #9E9E9E;
+    }
   </style>
 </head>
 <body>
@@ -130,7 +135,8 @@
       </div>
       <div class="header-right">
         <button id="voiceToggle" class="header-btn" onclick="toggleVoice()" title="Chuyển đổi giọng trả lời"></button>
-        <button class="header-btn" onclick="logout()">Đăng xuất</button>
+        <a href="/login" id="loginBtn" class="header-btn" style="display:none;text-decoration:none;">Đăng nhập</a>
+        <button id="logoutBtn" class="header-btn" onclick="logout()">Đăng xuất</button>
       </div>
     </div>
     <div class="container" id="mainContainer">
@@ -174,12 +180,24 @@ function toggleSidebar() {
   document.querySelector('.sidebar').classList.toggle('collapsed');
 }
 
-// Show Import Law / Manage Account buttons and role badge based on role
+// Show Import Law / Manage Account buttons and role badge based on role.
+// Also detects guest (unauthenticated) access — window.isGuest is read by
+// script.js's send handler to skip DB-backed chat creation for guests.
+window.isGuest = false;
 (async function() {
   try {
     const res  = await fetch("/session_info");
     const data = await res.json();
     const badge = document.getElementById("roleBadge");
+
+    if (!data.user_id) {
+      window.isGuest = true;
+      document.getElementById("logoutBtn").style.display = "none";
+      document.getElementById("loginBtn").style.display = "inline-block";
+      document.getElementById("sidebarToggle").style.display = "none";
+      badge.innerHTML = '<span class="role-badge guest">Khách — giới hạn 15 câu/phiên</span>';
+      return;
+    }
 
     if (data.user_type === "teacher" || data.user_type === "admin") {
       document.getElementById("importLawBtn").classList.add("visible");

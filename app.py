@@ -18,9 +18,9 @@ from database.database import (
     init_db, get_conn,
     login_user,
     create_chat, get_all_chats,
-    save_message, get_messages,
+    save_message, get_messages, count_user_messages,
     rename_chat, delete_chat,
-    get_chat_title, NOTIFICATION_CHAT_TITLE, MAX_CHATS_PER_USER,
+    get_chat_title, NOTIFICATION_CHAT_TITLE, MAX_CHATS_PER_USER, MAX_MESSAGES_PER_CHAT,
     get_all_users, set_user_status, delete_user,
     change_user_password,
     create_keyword, get_all_keywords, get_active_keywords, set_keyword_status,
@@ -74,12 +74,20 @@ def _parse_keyword_ids(raw: str) -> list:
 # ── Pages ─────────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    if not logged_in(request):
-        return templates.TemplateResponse(request, "login.html")
+    # Guests (not logged in) get index.html too — a single, ephemeral,
+    # never-persisted chat capped at MAX_MESSAGES_PER_CHAT (see /get below).
+    # They can still reach /login from the header to get a full account.
     return templates.TemplateResponse(request, "index.html", {
         "is_teacher": is_teacher(request),
         "is_admin":   is_admin(request),
     })
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    if logged_in(request):
+        return RedirectResponse("/")
+    return templates.TemplateResponse(request, "login.html")
 
 
 @app.get("/import", response_class=HTMLResponse)
@@ -161,8 +169,32 @@ async def chatbot(request: Request):
         if not user_input:
             return {"status": "error", "text": "⚠️ Bạn chưa nhập câu hỏi."}
 
+        # Guests: single ephemeral chat, nothing written to chat.db. Turn
+        # count lives only in the signed session cookie (same cap as
+        # logged-in users, MAX_MESSAGES_PER_CHAT), so it resets if the
+        # session cookie is cleared/expires — that's fine, guests have no
+        # history to lose either way.
+        if not logged_in(request):
+            guest_count = request.session.get("guest_msg_count", 0)
+            if guest_count >= MAX_MESSAGES_PER_CHAT:
+                return {
+                    "status": "limit",
+                    "text": f"⚠️ Bạn đã dùng hết {MAX_MESSAGES_PER_CHAT} câu hỏi miễn phí cho khách. "
+                            f"Vui lòng đăng nhập để tiếp tục trò chuyện.",
+                }
+            response = ask_rag(user_input, voice=voice)
+            request.session["guest_msg_count"] = guest_count + 1
+            return {"status": "success", "text": response}
+
         if chat_id and get_chat_title(chat_id) == NOTIFICATION_CHAT_TITLE:
             return {"status": "error", "text": f"⚠️ Không thể gửi tin nhắn trong đoạn chat '{NOTIFICATION_CHAT_TITLE}'."}
+
+        if chat_id and count_user_messages(chat_id) >= MAX_MESSAGES_PER_CHAT:
+            return {
+                "status": "limit",
+                "text": f"⚠️ Đoạn chat này đã đạt giới hạn {MAX_MESSAGES_PER_CHAT} câu hỏi. "
+                        f"Vui lòng tạo đoạn chat mới để tiếp tục.",
+            }
 
         save_message(chat_id, "user", user_input)
         response = ask_rag(user_input, voice=voice)
