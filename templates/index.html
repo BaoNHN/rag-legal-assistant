@@ -2,7 +2,7 @@
 <html lang="vi">
 <head>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" crossorigin="anonymous"/>
-  <link rel="stylesheet" href="/static/style.css"/>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_version }}"/>
   <meta charset="utf-8"/>
   <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
   <title>RAG Legal Assistant</title>
@@ -97,18 +97,24 @@
       color: #D63B3B;
       border: 1.5px solid #D63B3B;
     }
-    .role-badge.guest {
-      background: whitesmoke;
-      color: #616161;
-      border: 1.5px solid #9E9E9E;
-    }
   </style>
 </head>
 <body>
-<div class="layout">
-  <!-- SIDEBAR -->
-  <aside class="sidebar collapsed">
+<div class="layout sidebar-collapsed" id="layoutRoot">
+  <!-- SIDEBAR — guests get no toggle at all (server-side gated, not just
+       hidden by JS after the fact): there's nothing in it worth opening
+       (no saved chat history for an unauthenticated, never-persisted
+       session), and gating it here avoids any flash-of-the-wrong-state
+       before session_info's async fetch resolves. -->
+  <aside class="sidebar">
     <div class="sidebar-header">
+      {% if not is_guest %}
+      <div class="sidebar-toggle-row">
+        <button class="icon-toggle-btn" onclick="toggleSidebar()" title="Ẩn danh sách chat">
+          <i class="fa-solid fa-table-columns"></i>
+        </button>
+      </div>
+      {% endif %}
       <button class="new-chat">+ Đoạn chat mới</button>
       <!-- Import Law button — shown for teachers & admins via JS -->
       <a href="/import" class="btn-import-law" id="importLawBtn">
@@ -126,10 +132,18 @@
     <div class="sidebar-chats" id="chat-list"></div>
   </aside>
 
+  {% if not is_guest %}
+  <!-- Reopen button — only visible while the sidebar is collapsed. Distinct
+       ⚖️ icon (vs. the fa-table-columns icon used inside the open sidebar)
+       so it reads as "open the legal assistant", not a generic UI control. -->
+  <button id="sidebarToggleFloating" class="icon-toggle-btn floating-toggle" onclick="toggleSidebar()" title="Hiện danh sách chat">
+    ⚖️
+  </button>
+  {% endif %}
+
   <main class="chat-container">
     <div class="header">
       <div class="header-left">
-        <button id="sidebarToggle" class="header-btn" onclick="toggleSidebar()" title="Ẩn/hiện danh sách chat">☰</button>
         <span>Chat Assistant</span>
         <span id="roleBadge"></span>
       </div>
@@ -145,6 +159,7 @@
       <div id="welcome-screen">
         <h1 class="welcome-title">Chúng ta nên bắt đầu từ đâu?</h1>
         <p class="welcome-subtitle">Đặt câu hỏi về Luật Doanh nghiệp 2020 – 2025</p>
+        <p id="guestNotice" style="display:none;"></p>
         <div class="suggestion-chips">
           <button class="chip" data-prompt="Cổ đông là gì?">💡 Cổ đông là gì?</button>
           <button class="chip" data-prompt="Thành lập công ty TNHH cần điều kiện gì?">🏢 Thành lập công ty TNHH</button>
@@ -172,12 +187,15 @@
 
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/material-design-lite/1.3.0/material.indigo-pink.min.css"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/material-design-icons/3.0.1/iconfont/material-icons.css"/>
-<script src="/static/script.js"></script>
+<script src="/static/script.js?v={{ static_version }}"></script>
 <script>
 // Sidebar always starts closed on page load — opens only when the user
-// clicks the toggle (no cross-reload memory).
+// clicks the toggle (no cross-reload memory). Collapse state lives on
+// #layoutRoot (see style.css .layout.sidebar-collapsed), not on .sidebar
+// itself, so the floating reopen button (a sibling of .sidebar) can react
+// to the same class.
 function toggleSidebar() {
-  document.querySelector('.sidebar').classList.toggle('collapsed');
+  document.getElementById('layoutRoot').classList.toggle('sidebar-collapsed');
 }
 
 // Show Import Law / Manage Account buttons and role badge based on role.
@@ -194,8 +212,13 @@ window.isGuest = false;
       window.isGuest = true;
       document.getElementById("logoutBtn").style.display = "none";
       document.getElementById("loginBtn").style.display = "inline-block";
-      document.getElementById("sidebarToggle").style.display = "none";
-      badge.innerHTML = '<span class="role-badge guest">Khách — giới hạn 15 câu/phiên</span>';
+      // Sidebar toggle buttons aren't even rendered for guests (server-side
+      // gated via is_guest in app.py's / route) — nothing to hide here.
+      // Shown under the welcome subtitle, not in the header — a badge next
+      // to "Chat Assistant" up top looked cluttered.
+      const notice = document.getElementById("guestNotice");
+      notice.textContent = "Khách — giới hạn 15 câu/phiên";
+      notice.style.display = "block";
       return;
     }
 

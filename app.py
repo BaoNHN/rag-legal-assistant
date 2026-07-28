@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 import os
 import re
+import time
 import uuid
 import io
 
@@ -45,6 +46,11 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+# Cache-busting query param for /static/* asset URLs — bumps on every server
+# restart so browsers can't keep serving a stale cached style.css/script.js
+# after a deploy (this was the actual cause of a UI change appearing "not
+# applied" a few times during development, not a real code bug).
+templates.env.globals["static_version"] = str(int(time.time()))
 
 init_db()
 
@@ -80,6 +86,7 @@ async def home(request: Request):
     return templates.TemplateResponse(request, "index.html", {
         "is_teacher": is_teacher(request),
         "is_admin":   is_admin(request),
+        "is_guest":   not logged_in(request),
     })
 
 
