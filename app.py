@@ -12,6 +12,7 @@ from engine.rag_engine import (
     ask_rag,
     list_indexed_sources, delete_source, get_law_source_info,
     list_scenario_sources, delete_scenario_source,
+    list_dataset_sources, delete_dataset_source,
 )
 from database.database import (
     init_db, get_conn,
@@ -437,12 +438,26 @@ async def toggle_keyword_status_route(request: Request):
 async def list_dataset_sources_route(request: Request):
     if not logged_in(request) or not is_admin(request):
         return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
-    # Dataset files are test/evaluation fixtures only (2026-07-28) — tracked in
-    # chat.db, never embedded into ChromaDB. See engine/import_dataset_engine.py.
-    return [
-        {"name": f["filename"], "importer": f["importer"], "uploaded_at": f["uploaded_at"]}
-        for f in get_all_dataset_files()
-    ]
+    # Uploaded .xlsx files are tracked in chat.db (dataset_file table). Only
+    # their KB_Articles / KB_Articles_Updated / Legal_Update_2025 sheets get
+    # embedded into ChromaDB (curated reference content); Dataset_*/Demo_*
+    # sheets (the test Q&A pairs) never do — see engine/import_dataset_engine.py.
+    # Merge chat.db tracking with real Chroma chunk counts for display.
+    chroma  = {s["name"]: s for s in list_dataset_sources()}
+    tracked = {f["filename"]: f for f in get_all_dataset_files()}
+
+    result = []
+    for name in set(chroma) | set(tracked):
+        c  = chroma.get(name)
+        db = tracked.get(name)
+        result.append({
+            "name": name,
+            "chunk_count": c["chunk_count"] if c else 0,
+            "importer": (db["importer"] if db else None) or (c["importer"] if c else None) or "—",
+            "uploaded_at": db["uploaded_at"] if db else None,
+        })
+    result.sort(key=lambda x: x["name"])
+    return result
 
 
 @app.post("/delete_dataset_source")
@@ -455,14 +470,16 @@ async def delete_dataset_source_route(request: Request):
     if not source_name:
         return JSONResponse({"status": "error", "message": "Thiếu name"}, status_code=400)
 
-    tracked = {f["filename"] for f in get_all_dataset_files()}
-    if source_name not in tracked:
+    tracked_names = {f["filename"] for f in get_all_dataset_files()}
+    chroma_names  = {s["name"] for s in list_dataset_sources()}
+    if source_name not in tracked_names and source_name not in chroma_names:
         return JSONResponse(
-            {"status": "error", "message": f"Không tìm thấy dataset '{source_name}' trong danh sách đã theo dõi."},
+            {"status": "error", "message": f"Không tìm thấy dataset '{source_name}'."},
             status_code=404,
         )
 
     delete_dataset_file(source_name)
+    delete_dataset_source(source_name)
     # Also remove the physical file so it stops showing up in the Quick/Full
     # Evaluation dataset dropdown (engine.evaluate_engine.list_available_datasets
     # scans Dataset/ directly from disk).

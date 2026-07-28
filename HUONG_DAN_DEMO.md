@@ -321,7 +321,7 @@ Tại trang `/import`, nhấn tab **"📚 Tình huống"**.
 
 ## 8. Demo Import Dataset Excel — Vai Trò Giáo Viên
 
-> **Thay đổi lớn 2026-07-28:** Dataset Excel giờ **không còn nạp vào ChromaDB nữa**. Trước đây phát hiện rủi ro data leakage thật: đúng 200 dòng câu hỏi–đáp án của sheet `Dataset_200` (bộ câu hỏi dùng để chạy Full Evaluation, mục 9) bị lẫn vào ChromaDB dưới dạng đoạn chứa nguyên văn "Câu hỏi: ... / Trả lời: ...", khiến hệ thống có thể vô tình truy xuất trúng đáp án mẫu khi tự chấm điểm chính mình (xem mục 13.9/14). Để dứt điểm rủi ro thay vì chỉ vá riêng lẻ, **toàn bộ chức năng Import Dataset giờ chỉ dùng để quản lý bộ dữ liệu kiểm thử/đánh giá** — không còn đụng gì tới nội dung dùng để trả lời câu hỏi thật của người dùng. Muốn thêm nội dung luật thật vào ChromaDB, dùng **Import Văn bản luật** (mục 6) thay vì Import Dataset.
+> **Thay đổi 2026-07-28 (mô hình cuối cùng — hybrid):** Trước đây phát hiện rủi ro data leakage thật: đúng 200 dòng câu hỏi–đáp án của sheet `Dataset_200` (bộ câu hỏi dùng để chạy Full Evaluation, mục 9) bị lẫn vào ChromaDB dưới dạng đoạn chứa nguyên văn "Câu hỏi: ... / Trả lời: ...", khiến hệ thống có thể vô tình truy xuất trúng đáp án mẫu khi tự chấm điểm chính mình (xem mục 13.9/14). Bản vá đầu tiên (cùng ngày) xoá **toàn bộ** nội dung dataset khỏi ChromaDB — nhưng việc này vô tình xoá luôn `KB_Articles`/`KB_Articles_Updated`/`Legal_Update_2025`, là nội dung **tham khảo do giáo viên biên soạn thủ công** (không phải câu hỏi kiểm thử) và từng thực sự giúp trả lời đúng nhiều câu hỏi thật — xoá đi làm giảm điểm rõ rệt khi test lại (VD ELS053, ELU200). Vá lần cuối, đúng phạm vi rủi ro: chỉ sheet `Dataset_*`/`Demo_*` (câu hỏi–đáp án kiểm thử) **vĩnh viễn không nạp vào ChromaDB**; sheet `KB_Articles`/`KB_Articles_Updated`/`Legal_Update_2025` (nội dung tham khảo, không phải câu hỏi kiểm thử) **vẫn được nạp** như văn bản luật thật, có thể được dùng để trả lời câu hỏi người dùng.
 
 ### Bước 1: Chuyển Sang Tab Dataset
 
@@ -329,32 +329,39 @@ Tại trang `/import`, nhấn tab **"📊 Import Dataset"**.
 
 ### Bước 2: Upload File
 
-- Chọn/kéo thả file `.xlsx` có ít nhất 1 sheet đặt tên `Demo_*` hoặc `Dataset_*`
+- Chọn/kéo thả file `.xlsx` có sheet `KB_Articles`/`KB_Articles_Updated`/`Legal_Update_2025` và/hoặc sheet `Demo_*`/`Dataset_*`
 - Nhấn **"📥 Lưu làm bộ dữ liệu kiểm thử"**
 
-### Bước 3: Quy Trình Xử Lý Nền (đơn giản hoá hoàn toàn, 2026-07-28)
+### Bước 3: Quy Trình Xử Lý Nền (mô hình hybrid, 2026-07-28)
 
 ```
-1. Đọc tên các sheet trong file .xlsx — chỉ cần biết có sheet nào bắt đầu bằng
-   "Demo_" hay "Dataset_" không, KHÔNG đọc/xử lý nội dung từng dòng
-2. Nếu không có sheet nào thuộc 2 tiền tố trên → báo lỗi, dừng lại (file này
-   không dùng được cho Quick/Full Evaluation)
+1. Đọc tên các sheet trong file .xlsx
+2. Nếu file không có bất kỳ sheet nào thuộc KB_Articles/KB_Articles_Updated/
+   Legal_Update_2025/Demo_*/Dataset_* → báo lỗi, dừng lại
 3. Lưu file .xlsx gốc vào thư mục Dataset/ (không xoá, không ghi đè — trùng tên
-   thì tự thêm hậu tố thời gian) — nhờ vậy file tự động xuất hiện trong dropdown
-   chọn dataset ở mục 9 (Đánh giá hệ thống RAG)
-4. Ghi lại tên file + người nhập + thời điểm nhập vào bảng dataset_file trong
-   chat.db (mục 13.5) — đây là nguồn dữ liệu cho tab Dataset ở Manage Law (mục 11),
-   KHÔNG còn liên quan gì tới ChromaDB nữa
+   thì tự thêm hậu tố thời gian)
+4. Nếu có sheet KB_Articles(_Updated) → dựng đoạn nội dung (article_reference +
+   topic + legal_rule_summary_vi...), gắn so_ky_hieu=59/2020/QH14, import_source=
+   "dataset", nạp vào ChromaDB (có kiểm tra trùng lặp qua doc_id/so_ky_hieu/nội
+   dung y hệt, không nhân đôi khi import lại cùng file)
+5. Nếu có sheet Legal_Update_2025 → xử lý tương tự (đoạn nội dung riêng, cùng
+   so_ky_hieu), nạp vào ChromaDB
+6. Sheet Demo_*/Dataset_* KHÔNG được đọc nội dung từng dòng, KHÔNG bao giờ nạp
+   vào ChromaDB — chỉ tồn tại trên đĩa để mục 9 (Đánh giá RAG) đọc trực tiếp
+7. Tự sinh Từ khóa phụ (mục 13.8) cho file từ cột retrieval_keywords của các
+   dòng KB_Articles — không có Từ khóa chính (đặc quyền dành riêng cho Import
+   Văn bản luật, mục 6)
+8. Ghi lại tên file + người nhập + thời điểm nhập vào bảng dataset_file trong
+   chat.db (mục 13.5) — dùng để hiển thị ở tab Dataset của Manage Law (mục 11)
 ```
 
-- **Không** còn embedding, không còn nạp vào ChromaDB, không còn gắn Từ khóa (mục 13.8) — file chỉ nằm trên đĩa và được track tên trong `chat.db`
-- Kết quả trả về: danh sách sheet Demo/Dataset tìm thấy, xác nhận đã lưu thành công
+- Kết quả trả về: số đoạn KB đã nạp ChromaDB (mới thêm/bỏ qua trùng lặp) + danh sách sheet Demo/Dataset tìm thấy (không nạp)
 - Tất cả file dataset (upload qua đây hoặc đặt thủ công) đều nằm trong thư mục
   **`Dataset/`** ở gốc dự án — đây là nơi duy nhất hệ thống quét để tìm file cho
   tính năng Đánh giá RAG (mục 9); file đặt thủ công (không qua giao diện) vẫn dùng
   được cho mục 9 (quét trực tiếp từ đĩa) nhưng sẽ không xuất hiện ở tab Dataset của
-  Manage Law cho tới khi được track — chạy `register_dataset_file()` thủ công qua
-  Python nếu cần, hoặc import lại qua giao diện
+  Manage Law cho tới khi được track — import lại qua giao diện để cả nạp KB (nếu có)
+  lẫn đăng ký tracking cùng lúc
 - File `Dataset/example_sheet.xlsx` là **file mẫu/template** (phục vụ nút tải mẫu ở mục 9), luôn bị loại khỏi dropdown đánh giá — không phải dữ liệu thật
 
 ---
@@ -451,7 +458,7 @@ Chỉ tài khoản có vai trò **Admin** mới truy cập được các tính n
 
 ## 11. Demo Quản Lý Văn Bản (Manage Law) — Vai Trò Giáo Viên + Admin
 
-Trang quản lý tập trung cho **2 luồng import vào ChromaDB** (Văn bản pháp luật — mục 6, Tình huống — mục 7) và **Dataset** (mục 8 — chỉ file kiểm thử trên đĩa, không còn vào ChromaDB, xem mục 14). *Cập nhật 2026-07-28:* trang `/manage_law` giờ **mở cho cả Giáo viên**, không còn Admin-only như trước — nhưng Giáo viên chỉ thấy đúng 1 tab **"Văn bản pháp luật"** và **không có nút Xoá**; 3 tab còn lại (Dataset, Tình huống, Kiểm thử hồi quy) cùng tab **Từ khóa** mới vẫn chỉ Admin thấy được (ẩn phía client dựa theo `role` trả về từ `/session_info`, đồng thời các API `/list_dataset_sources`/`/list_scenario_sources`/... vẫn chặn 403 phía server nếu không phải Admin — không chỉ ẩn giao diện).
+Trang quản lý tập trung cho **3 luồng import vào ChromaDB** (Văn bản pháp luật — mục 6, Tình huống — mục 7, phần KB_Articles*/Legal_Update_2025 của Dataset — mục 8) và tracking file kiểm thử trên đĩa (sheet Demo_*/Dataset_* của Dataset — không vào ChromaDB, xem mục 14). *Cập nhật 2026-07-28:* trang `/manage_law` giờ **mở cho cả Giáo viên**, không còn Admin-only như trước — nhưng Giáo viên chỉ thấy đúng 1 tab **"Văn bản pháp luật"** và **không có nút Xoá**; 3 tab còn lại (Dataset, Tình huống, Kiểm thử hồi quy) cùng tab **Từ khóa** mới vẫn chỉ Admin thấy được (ẩn phía client dựa theo `role` trả về từ `/session_info`, đồng thời các API `/list_dataset_sources`/`/list_scenario_sources`/... vẫn chặn 403 phía server nếu không phải Admin — không chỉ ẩn giao diện).
 
 ### Bước 1: Truy Cập Trang Quản Lý
 
@@ -464,7 +471,7 @@ Trang quản lý tập trung cho **2 luồng import vào ChromaDB** (Văn bản 
 | Tab | Nhóm theo | Ai thấy | Ghi chú |
 |---|---|---|---|
 | **📖 Văn bản pháp luật** | Số ký hiệu (`so_ky_hieu`) | Teacher + Admin | Xoá toàn bộ đoạn có cùng số ký hiệu — vd xoá `59/2020/QH14` sẽ gỡ hết các đoạn thuộc văn bản đó. Chỉ Admin thấy nút Xoá; cả 2 vai trò đều thấy nút **"Xem thông tin"** (Bước 3) |
-| **📊 Dataset** | Tên file `.xlsx` đã upload — tra từ bảng `dataset_file` trong `chat.db`, **không phải ChromaDB** (đổi 2026-07-28, xem mục 8) | Admin | Xoá ở đây = xoá file thật khỏi `Dataset/` + gỡ khỏi theo dõi, file sẽ biến mất khỏi dropdown đánh giá (mục 9). Không có nút "Xem thông tin" (dataset không còn khái niệm từ khóa/nguồn nữa, chỉ là file test) |
+| **📊 Dataset** | Tên file `.xlsx` đã upload — danh sách hợp nhất từ bảng `dataset_file` trong `chat.db` (mọi file đã track) với số đoạn thật trong ChromaDB (đổi 2026-07-28, xem mục 8) | Admin | Cột "Đoạn trong database" chỉ đếm đoạn từ sheet KB_Articles*/Legal_Update_2025 của file đó (sheet Demo_*/Dataset_* không bao giờ có đoạn). Xoá ở đây = xoá file thật khỏi `Dataset/` + gỡ khỏi theo dõi + gỡ mọi đoạn KB liên quan khỏi ChromaDB, file sẽ biến mất khỏi dropdown đánh giá (mục 9). Không có nút "Xem thông tin" (từ khóa tự sinh, xem mục 8) |
 | **📚 Tình huống** | Tên file `.docx` đã upload (`nguon_thu_thap`) | Admin | Xoá theo từng file — không ảnh hưởng các file tình huống khác. Không có nút "Xem thông tin" (từ khóa tự sinh, xem mục 7) |
 
 Nhấn **"Xoá"** ở dòng tương ứng → xác nhận → hệ thống xoá toàn bộ đoạn khớp khỏi ChromaDB, đồng thời làm mới whitelist trích dẫn (`CITATION_SOURCE`) ngay lập tức để không còn trích dẫn tới nguồn đã xoá.
@@ -607,7 +614,7 @@ rag-legal-assistant-master/
 │   ├── index.html                   # Giao diện chat chính
 │   ├── import_law.html              # Import PDF/DOCX + Import Tình huống + Import Dataset + Đánh giá RAG
 │   ├── manage_accounts.html         # Quản lý tài khoản (Admin)
-│   ├── manage_law.html              # Quản lý văn bản đã import — 3 tab (Admin)
+│   ├── manage_law.html              # Quản lý văn bản đã import — 5 tab (Teacher: chỉ tab Văn bản; Admin: đủ 5)
 │   └── import_account.html          # Import tài khoản hàng loạt (Admin)
 ├── chroma_db/                       # Vector database (ChromaDB)
 ├── Dataset/                          # Mọi file .xlsx dùng để đánh giá RAG (mục 9) — nơi duy nhất /list_datasets quét
@@ -698,13 +705,16 @@ keyword        (id, name, status)   # thêm 2026-07-28, xem mục 13.8/13.9
                # status: 0=chấm điểm nguồn/đang dùng, 1=chấm điểm nguồn/đã tắt,
                #         2=chặn ngoài phạm vi/đang dùng, 3=chặn ngoài phạm vi/đã tắt
 source_keyword (id, source_type, source_key, keyword_id, kind)   # thêm 2026-07-28
-               # source_type: law|scenario (dataset đã bỏ khỏi cơ chế này, xem mục
-               # 13.8/13.9 và mục 14 "Bộ Câu Hỏi Full Evaluation Từng Bị Lẫn Vào
-               # ChromaDB") ; source_key: so_ky_hieu (law) / nguon_thu_thap (scenario)
-               # ; kind: primary|secondary
+               # source_type: law|scenario|dataset ; source_key: so_ky_hieu (law) /
+               # nguon_thu_thap (scenario) / tên file .xlsx (dataset) ; kind:
+               # primary|secondary — law import chọn tay Từ khóa chính (bắt buộc)
+               # + phụ (tuỳ chọn) qua UI; scenario/dataset chỉ tự sinh Từ khóa phụ
+               # từ retrieval_keywords lúc import, không có tay chọn/sửa qua UI
+               # (xem mục 13.8, và mục 14 về vụ data leakage liên quan tới dataset)
 dataset_file   (id, filename, importer, uploaded_at)   # thêm 2026-07-28, xem mục 8/11
-               # Danh sách file dataset .xlsx đã upload — CHỈ để track cho tab
-               # Dataset ở Manage Law, không liên quan tới ChromaDB
+               # Danh sách file dataset .xlsx đã upload, dùng để hợp nhất với số
+               # đoạn ChromaDB thật (KB_Articles*/Legal_Update_2025) khi hiển thị
+               # tab Dataset ở Manage Law — bản thân bảng này không lưu nội dung
 ```
 
 Chat giáo viên và học sinh được tách biệt hoàn toàn theo cột `role`, ngay cả khi `user_id` trùng nhau. Admin dùng chung không gian chat với vai trò Teacher (`role=1`).
@@ -742,7 +752,7 @@ Loạt sửa lỗi sau khi rà soát kỹ file `25-7 nhan xet.docx` và đo Quic
 - **Chấm điểm (rerank):** nếu câu hỏi khớp Từ khóa chính của nguồn đang xét → **+8 điểm**; khớp Từ khóa phụ → **+4 điểm**. Giá trị cố ý để nhỏ (ban đầu thử +25/+10 giống các boost cứng khác, nhưng test thật phát hiện: một nguồn vừa có đoạn luật gốc vừa có đoạn dataset đã curate riêng cho đúng câu hỏi đó, +25 áp đều cho mọi đoạn của nguồn đủ để đoạn luật gốc chung chung thắng điểm đoạn dataset curate chính xác hơn — xem `_score_doc()` trong `rag_engine.py` để rõ chi tiết phép đo).
 - **Truy xuất (retrieval augmentation):** ngoài chấm điểm, nếu câu hỏi khớp từ khóa của 1 nguồn, hệ thống còn **chủ động kéo thêm top-5 đoạn phù hợp nhất** của nguồn đó vào danh sách ứng viên — tránh trường hợp semantic/keyword search thường không tìm ra nguồn mới (chưa có `retrieval_keywords` curate sẵn) nên chấm điểm dù có boost cũng không có cơ hội phát huy. Chỉ kéo top-5, **không kéo cả nguồn**, vì một nguồn được gắn có thể có hàng trăm đoạn (VD Luật Doanh nghiệp 2020 có 310 đoạn) — kéo hết sẽ làm loãng candidate pool.
 - Cơ chế **cộng thêm hoàn toàn** (additive) — nguồn chưa được gắn từ khóa nào hoạt động y hệt trước đây, không có gì thay đổi. Xác nhận qua `evaluate/retrieval_regression_tests.py` (4/4 pass) và so sánh trực tiếp trích dẫn 10 câu mẫu trước/sau khi thêm — giống hệt.
-- Chỉ **Văn bản pháp luật** mới có Từ khóa chính (buff cao) vì đây là nguồn chính thức quan trọng nhất; **Tình huống** chỉ tự sinh Từ khóa phụ (buff thấp) vì là dữ liệu làm giàu ngữ cảnh, không phải nguồn thẩm quyền (xem mục 7). **Dataset không còn tham gia cơ chế này nữa** — từ 2026-07-28, Dataset chỉ là file kiểm thử trên đĩa, không nạp vào ChromaDB nên không có gì để gắn từ khóa/chấm điểm (xem mục 8 và mục 14 "Bộ Câu Hỏi Full Evaluation Từng Bị Lẫn Vào ChromaDB").
+- Chỉ **Văn bản pháp luật** mới có Từ khóa chính (buff cao) vì đây là nguồn chính thức quan trọng nhất; **Tình huống** và phần **KB_Articles*/Legal_Update_2025 của Dataset** chỉ tự sinh Từ khóa phụ (buff thấp) vì là dữ liệu làm giàu ngữ cảnh, không phải nguồn thẩm quyền (xem mục 7, mục 8). Sheet `Demo_*`/`Dataset_*` của Dataset không tham gia cơ chế này vì không nạp vào ChromaDB — không có gì để gắn từ khóa/chấm điểm (xem mục 8 và mục 14 "Bộ Câu Hỏi Full Evaluation Từng Bị Lẫn Vào ChromaDB").
 
 ### 13.9 Danh Sách Chặn Ngoài Phạm Vi Chuyển Vào Database (thêm 2026-07-28)
 
@@ -887,19 +897,26 @@ DEVICE=cuda
 
 ### [LỊCH SỬ, KHÔNG CÒN ÁP DỤNG] Import Dataset Tạo Đoạn Trùng Khi Nhập Lại Cùng File
 
-**Đã sửa 2026-07-28 sáng, rồi toàn bộ pipeline liên quan bị bỏ luôn 2026-07-28 chiều** (xem mục ngay dưới đây) — Import Dataset không còn nạp gì vào ChromaDB nữa, nên lỗi trùng đoạn kiểu này **không còn khả năng xảy ra**. Giữ lại đoạn này chỉ để ghi nhớ bối cảnh: `run_import_dataset()` từng lọc trùng theo `doc_id` hoặc theo Số ký hiệu + nhãn `"KB_Articles"`, nhưng sheet `Legal_Update_2025` không khớp điều kiện nào nên bị trùng mỗi lần nhập lại — chính triệu chứng này dẫn tới việc rà lại toàn bộ pipeline và phát hiện ra rủi ro data leakage nghiêm trọng hơn ở mục dưới.
+**Đã sửa 2026-07-28 sáng** — vẫn áp dụng cho phần KB_Articles*/Legal_Update_2025 (phần duy nhất còn nạp ChromaDB sau bản vá cuối, xem mục ngay dưới). Giữ lại đoạn này để ghi nhớ bối cảnh: `run_import_dataset()` từng lọc trùng theo `doc_id` hoặc theo Số ký hiệu + nhãn `"KB_Articles"`, nhưng sheet `Legal_Update_2025` không khớp điều kiện nào nên bị trùng mỗi lần nhập lại — đã sửa bằng cách thêm fallback so khớp nguyên văn nội dung khi thiếu cả 2 điều kiện trên. Chính triệu chứng này dẫn tới việc rà lại toàn bộ pipeline và phát hiện ra rủi ro data leakage nghiêm trọng hơn ở mục dưới.
 
 ---
 
-### Bộ Câu Hỏi Full Evaluation Từng Bị Lẫn Vào ChromaDB (data leakage) — ĐÃ KHẮC PHỤC 2026-07-28
+### Bộ Câu Hỏi Full Evaluation Từng Bị Lẫn Vào ChromaDB (data leakage) — ĐÃ KHẮC PHỤC 2026-07-28 (2 đợt vá)
 
 **Triệu chứng đã quan sát trước khi sửa:** Điểm Full Evaluation (mục 9) cao bất thường hoặc dao động mạnh giữa các lượt chạy trên cùng 1 bộ câu hỏi.
 
 **Nguyên nhân (phát hiện 2026-07-28, xác minh trực tiếp trên ChromaDB đang chạy):** File dataset dùng để Full Evaluation (sheet `Dataset_150`/`Dataset_200`) cũng chính là file được import vào ChromaDB qua mục 8 kiểu cũ. Kết quả: 200 dòng câu hỏi–đáp án của `Dataset_200` từng nằm trong ChromaDB dưới dạng đoạn chứa nguyên văn `"Câu hỏi: ... / Trả lời: ..."`. Khi chạy Full Evaluation, hệ thống có thể vô tình truy xuất trúng chính đáp án mẫu thay vì tự suy luận từ luật gốc — làm điểm bị thổi phồng ở những câu bị trùng.
 
-**Đã khắc phục dứt điểm (không phải vá riêng lẻ):** Xoá toàn bộ 310 đoạn có `import_source="dataset"` khỏi ChromaDB (gồm cả `KB_Articles_Updated`/`Legal_Update_2025` lẫn `Dataset_200`), rồi viết lại hẳn `import_dataset_engine.py` — Import Dataset giờ **không bao giờ** nạp gì vào ChromaDB nữa, chỉ lưu file vào `Dataset/` + track tên file trong bảng `dataset_file` (`chat.db`, mục 13.5) để phục vụ riêng Quick/Full Evaluation (mục 9). Xem mục 8 để biết luồng mới. Muốn có nội dung luật thật trong ChromaDB, dùng **Import Văn bản luật** (mục 6) — không dùng Import Dataset nữa.
+**Đợt vá 1 (quá rộng, đã bị thay thế):** Xoá toàn bộ 310 đoạn có `import_source="dataset"` khỏi ChromaDB — gồm cả `Dataset_200` (đúng nguồn rò rỉ) lẫn `KB_Articles_Updated`/`Legal_Update_2025` (nội dung tham khảo do giáo viên biên soạn, **không phải** câu hỏi kiểm thử). Việc xoá nhầm phần KB làm giảm điểm rõ rệt khi test lại 10 câu bất kỳ — VD `ELS053` (trích dẫn sai Điều 78 thay vì Điều 207) và `ELU200` (mất điểm `citation_correct`) — vì các câu này thực sự dựa vào nội dung KB đã bị xoá oan để trả lời đúng.
 
-**Xác minh sau khi sửa:** ChromaDB giảm từ 743 → 433 đoạn (166 NĐ 168/2025 + 245 VBHN 67 + 2 BLDS + 20 tình huống — không còn đoạn dataset nào); `evaluate/retrieval_regression_tests.py` vẫn 4/4 pass; Quick/Full Evaluation (mục 9) vẫn hoạt động bình thường vì nó luôn đọc trực tiếp từ file `.xlsx` trên đĩa, không phụ thuộc ChromaDB.
+**Đợt vá 2 (cuối cùng, đúng phạm vi rủi ro):** Viết lại `import_dataset_engine.py` để phân biệt rõ 2 loại sheet: `Dataset_*`/`Demo_*` (câu hỏi–đáp án kiểm thử — nguồn rò rỉ thật) **vĩnh viễn không nạp vào ChromaDB**, chỉ lưu file vào `Dataset/` + track trong bảng `dataset_file` (`chat.db`, mục 13.5) phục vụ Quick/Full Evaluation (mục 9); còn `KB_Articles`/`KB_Articles_Updated`/`Legal_Update_2025` (nội dung tham khảo, không phải test) **được nạp lại vào ChromaDB** như trước — có dùng để trả lời câu hỏi thật. Xem mục 8 để biết luồng chi tiết.
+
+**Xác minh sau đợt vá 2 (import lại file `enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx`):**
+- ChromaDB: 433 đoạn (sau đợt vá 1, không còn đoạn dataset nào) → **543 đoạn** (413 văn bản luật + 20 tình huống + **110 đoạn KB mới nạp lại**: 103 `KB_Articles_Updated` + 7 `Legal_Update_2025`)
+- Quét toàn bộ 110 đoạn `import_source="dataset"`: **0 đoạn** chứa mẫu văn bản rò rỉ `"Câu hỏi: ... / Trả lời: ..."` — không tái phát rò rỉ
+- `ELS053`/`ELU200` (2 câu bị ảnh hưởng ở đợt vá 1) test lại qua `ask_rag()`: cả 2 phục hồi đúng — `ELS053` trích đúng Điều 207 (giải thể khi đang tranh chấp toà án/trọng tài), `ELU200` từ chối đúng cách hướng dẫn né tránh kê khai chủ sở hữu hưởng lợi, trích đúng Nghị định 168/2025/NĐ-CP
+- `evaluate/retrieval_regression_tests.py`: vẫn **4/4 pass**
+- Quick/Full Evaluation (mục 9) không đổi hành vi — luôn đọc trực tiếp từ file `.xlsx` trên đĩa, không phụ thuộc ChromaDB
 
 ---
 
