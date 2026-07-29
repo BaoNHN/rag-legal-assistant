@@ -7,15 +7,52 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # database/ → root
 DB_NAME  = os.path.join(BASE_DIR, "chat.db")
 
-# keyword.status — one column, two independent purposes (see init_db()'s
-# `keyword` table comment): a "scoring" keyword (source_keyword tagging,
-# _score_doc() boost) or an "out-of-scope" keyword (engine.rag_engine.
+# keyword.status — one column, four independent kinds (see init_db()'s
+# `keyword` table comment): a "scoring" keyword (source_keyword primary/
+# secondary tagging, _score_doc() boost — article-scoped only, see
+# set_source_keywords), an "out-of-scope" keyword (engine.rag_engine.
 # _is_out_of_scope()'s blocklist, formerly the hardcoded OUT_OF_SCOPE_KEYWORDS
-# Python constant). Even values = active, odd = disabled.
-KEYWORD_STATUS_ACTIVE       = 0  # scoring keyword, selectable for tagging
-KEYWORD_STATUS_DISABLED     = 1  # scoring keyword, hidden from picker
-KEYWORD_STATUS_OOS_ACTIVE   = 2  # out-of-scope keyword, currently blocking
-KEYWORD_STATUS_OOS_DISABLED = 3  # out-of-scope keyword, currently not blocking
+# Python constant), or a "priority" keyword (kind="priority" — boosts one
+# specific source directly, ADDITIVELY per matched keyword, when its own
+# phrase matches the question; see _score_doc). Even values = active, odd =
+# disabled; each kind is its own (active, disabled) pair rather than one
+# shared toggle, same pattern as the original two.
+#
+# A "penalty" kind (kind="penalty", unconditional per-source deprioritization)
+# existed 2026-07-29 through 2026-07-29 and was removed the same day: it
+# needed to be BOTH applied (59/2020/QH14's Điều 26 competing against
+# 168/2025/NĐ-CP's Điều 76/77 on ELU177/178) AND not applied (Điều 26 is the
+# correct answer on ELS066/ELU170/ELU169 — same article, different
+# questions) — no single per-source value satisfies both, since it can't
+# discriminate between sibling articles of the same document. Replaced
+# entirely by "priority" (boosts the correct article directly, additively,
+# without ever touching a competing source's own score) plus per-article
+# tagging (source_type="law_article", see _score_doc) — live-verified
+# (2026-07-29) to cover every case the penalty used to handle, with two
+# cases actually improving once the penalty's side effects were removed.
+# Status values 4-7 (the old penalty range) are intentionally left unused
+# rather than reassigned, so any historical data referencing them fails
+# loudly instead of silently changing meaning.
+KEYWORD_STATUS_ACTIVE            = 0  # scoring keyword, selectable for tagging
+KEYWORD_STATUS_DISABLED          = 1  # scoring keyword, hidden from picker
+KEYWORD_STATUS_OOS_ACTIVE        = 2  # out-of-scope keyword, currently blocking
+KEYWORD_STATUS_OOS_DISABLED      = 3  # out-of-scope keyword, currently not blocking
+KEYWORD_STATUS_PRIORITY_ACTIVE   = 8  # priority keyword (+15, additive per match), selectable for priority tagging
+KEYWORD_STATUS_PRIORITY_DISABLED = 9
+
+# name -> active status, for create_keyword()'s `kind` param
+_KEYWORD_KIND_TO_STATUS = {
+    "scoring":  KEYWORD_STATUS_ACTIVE,
+    "oos":      KEYWORD_STATUS_OOS_ACTIVE,
+    "priority": KEYWORD_STATUS_PRIORITY_ACTIVE,
+}
+# Additive per matched keyword (not a flat one-time bonus) — see _score_doc.
+# +15 sized so 3-4 stacked matching keywords close the ~45-60 point gap
+# measured on the hardest cases (2026-07-29), letting an admin close a gap of
+# any size by tagging more genuinely-matching phrases rather than needing one
+# single large number (per user request). Single tier, no hard/soft split —
+# stack more keywords instead of picking a severity (per user request).
+PRIORITY_SCORE = 15
 
 
 def get_conn():
@@ -622,15 +659,26 @@ def change_user_password(username: str, old_password: str, new_password: str):
 # =========================
 # KEYWORD (admin-managed scoring keywords — see engine.rag_engine._score_doc)
 # =========================
-def create_keyword(name: str, is_out_of_scope: bool = False):
-    """Creates a new active keyword — a scoring keyword (status=0, the
-    default) or an out-of-scope blocklist entry (status=2, is_out_of_scope=True).
-    Returns its id, or None if the name already exists (one shared unique
-    name namespace across both kinds — a name can't be both at once)."""
+# A keyword is meant to be a short matchable phrase, not a descriptive
+# sentence — one admin-created entry ("văn bản gốc chưa hợp nhất (ưu tiên
+# thấp hơn 67/VBHN-VPQH)", 57 chars) overflowed the Quản lý từ khóa table's
+# row layout (2026-07-29, user report). 50 comfortably covers the longest
+# legitimate existing keyword ("văn phòng đại diện thương nhân nước ngoài",
+# 41 chars) while rejecting sentence-length descriptions like that one.
+MAX_KEYWORD_NAME_LENGTH = 50
+
+
+def create_keyword(name: str, kind: str = "scoring"):
+    """Creates a new active keyword. kind: "scoring" (default, for
+    article-scoped source tagging) | "oos" (out-of-scope blocklist) |
+    "priority" (see KEYWORD_STATUS_* above). Returns its id, or None if the
+    name already exists (one shared unique name namespace across every kind —
+    a name can't be more than one kind at once) or exceeds
+    MAX_KEYWORD_NAME_LENGTH."""
     name = (name or "").strip()
-    if not name:
+    if not name or len(name) > MAX_KEYWORD_NAME_LENGTH:
         return None
-    status = KEYWORD_STATUS_OOS_ACTIVE if is_out_of_scope else KEYWORD_STATUS_ACTIVE
+    status = _KEYWORD_KIND_TO_STATUS.get(kind, KEYWORD_STATUS_ACTIVE)
     conn = sqlite3.connect(DB_NAME)
     c    = conn.cursor()
     try:
@@ -645,8 +693,10 @@ def create_keyword(name: str, is_out_of_scope: bool = False):
 
 def get_all_keywords() -> list:
     """Every keyword of every kind/status — for the admin 'Từ khóa' tab
-    (scoring + out-of-scope, active + disabled; the UI derives "Loại" from
-    status < 2 vs >= 2 and "Trạng thái" from status being even vs odd)."""
+    (scoring + out-of-scope + priority, active + disabled; the UI derives
+    "Loại" from status//2 (0=scoring,1=oos,4=priority — 2/3 reserved,
+    formerly penalty, retired 2026-07-29) and "Trạng thái" from status being
+    even vs odd)."""
     conn = sqlite3.connect(DB_NAME)
     rows = conn.execute("SELECT id, name, status FROM keyword ORDER BY name ASC").fetchall()
     conn.close()
@@ -654,12 +704,32 @@ def get_all_keywords() -> list:
 
 
 def get_active_keywords() -> list:
-    """Active scoring keywords only (status=0) — for the tag-picker <select>
-    when tagging a source. Disabled and out-of-scope keywords must not be
-    selectable for new source tags."""
+    """Active scoring keywords only (status=0) — for the article-scoped
+    tag-picker <select> when tagging a source. Disabled, out-of-scope, AND
+    priority keywords must not be selectable here — a priority keyword
+    getting picked as a scoring tag by mistake was the exact confusion this
+    status split was added to prevent (2026-07-29, user report)."""
     conn = sqlite3.connect(DB_NAME)
     rows = conn.execute(
         "SELECT id, name FROM keyword WHERE status=0 ORDER BY name ASC"
+    ).fetchall()
+    conn.close()
+    return [{"id": r[0], "name": r[1]} for r in rows]
+
+
+def get_active_priority_keywords() -> list:
+    """Active priority keywords only (status=8) — for the dedicated "Từ khóa
+    tăng ưu tiên" tag-picker <select>. A priority tag boosts one specific
+    source directly (see _score_doc) — added 2026-07-29 after a source-wide
+    penalty on 59/2020/QH14 turned out to conflict with itself (same
+    article legitimately correct on some questions, wrong on others;
+    boosting the actually-correct competing article instead sidesteps that
+    entirely, since it never touches the
+    other source's own score). Single tier (no hard/soft) — stack more
+    matching keywords instead of picking a severity."""
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        "SELECT id, name FROM keyword WHERE status=8 ORDER BY name ASC"
     ).fetchall()
     conn.close()
     return [{"id": r[0], "name": r[1]} for r in rows]
@@ -682,8 +752,11 @@ def get_or_create_keyword(name: str) -> int:
     """Looks up a keyword by exact name, creating it (active) if missing.
     Used by Dataset/Scenario imports to auto-tag from their own curated
     retrieval_keywords / "Từ khóa" fields instead of a manual picker — those
-    phrases won't generally already exist in the admin-seeded keyword list."""
-    name = (name or "").strip()
+    phrases won't generally already exist in the admin-seeded keyword list.
+    Silently truncated to MAX_KEYWORD_NAME_LENGTH (unlike create_keyword,
+    which rejects — this path runs unattended during import, with no form to
+    show a validation error on)."""
+    name = (name or "").strip()[:MAX_KEYWORD_NAME_LENGTH].strip()
     conn = sqlite3.connect(DB_NAME)
     c    = conn.cursor()
     row  = c.execute("SELECT id FROM keyword WHERE name=?", (name,)).fetchone()
@@ -707,18 +780,21 @@ def set_keyword_status(keyword_id: int, status: int):
 
 
 def get_source_keywords(source_type: str, source_key: str) -> dict:
-    """{"primary": [{id,name}, ...], "secondary": [...]} for one source
-    (source_type: 'law'|'dataset'|'scenario', source_key: so_ky_hieu /
+    """{"primary": [{id,name}, ...], "secondary": [...], "priority":
+    [{id,name}, ...]} for one source (source_type: 'law'|'law_article'|
+    'dataset'|'scenario', source_key: so_ky_hieu / "<so_ky_hieu>#<article>" /
     source_file / nguon_thu_thap respectively — see init_db()'s comment on
-    source_keyword for the mapping). Deliberately not filtered by
-    keyword.status — a keyword already tagged to a source stays tagged (and
-    keeps scoring) even after being disabled; disabling only removes it from
-    the picker for *new* tags."""
+    source_keyword for the mapping). "priority" tags boost the source
+    directly, additively, when the keyword's own phrase matches the question
+    (single tier, no severity) — see engine.rag_engine._score_doc.
+    Deliberately not filtered by keyword.status — a keyword already tagged to
+    a source stays tagged (and keeps scoring) even after being disabled;
+    disabling only removes it from the picker for *new* tags."""
     source_key = (source_key or "").strip()
     conn = sqlite3.connect(DB_NAME)
     rows = conn.execute(
         """
-        SELECT k.id, k.name, sk.kind
+        SELECT k.id, k.name, sk.kind, k.status
         FROM source_keyword sk
         JOIN keyword k ON k.id = sk.keyword_id
         WHERE sk.source_type = ? AND sk.source_key = ?
@@ -727,16 +803,68 @@ def get_source_keywords(source_type: str, source_key: str) -> dict:
         (source_type, source_key)
     ).fetchall()
     conn.close()
-    result = {"primary": [], "secondary": []}
-    for kid, name, kind in rows:
-        bucket = "primary" if kind == "primary" else "secondary"
-        result[bucket].append({"id": kid, "name": name})
+    result = {"primary": [], "secondary": [], "priority": []}
+    for kid, name, kind, kw_status in rows:
+        if kind == "priority":
+            result["priority"].append({"id": kid, "name": name})
+        elif kind == "primary":
+            result["primary"].append({"id": kid, "name": name})
+        else:
+            result["secondary"].append({"id": kid, "name": name})
     return result
 
 
-def set_source_keywords(source_type: str, source_key: str, primary_ids: list, secondary_ids: list):
+def get_tagged_articles(so_ky_hieu: str) -> list:
+    """Lists every Điều of one law/document (source_type='law_article',
+    source_key='<so_ky_hieu>#<article>') that has at least one tag, so the
+    admin UI can show "which articles already have something set" instead of
+    requiring them to guess/type an article number one at a time to find out
+    (2026-07-29 UX request — the per-article picker only reveals what's
+    tagged *after* you already know which Điều to look up, which made
+    duplicate/forgotten tags easy to miss). Returns
+    [{"article": "77", "primary": [names], "secondary": [names],
+    "priority": [names]}, ...] sorted numerically by article number where
+    it parses as an int, non-numeric suffixes (e.g. "20a") last alphabetically."""
+    so_ky_hieu = (so_ky_hieu or "").strip()
+    if not so_ky_hieu:
+        return []
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        """
+        SELECT sk.source_key, k.name, sk.kind
+        FROM source_keyword sk
+        JOIN keyword k ON k.id = sk.keyword_id
+        WHERE sk.source_type = 'law_article'
+        """
+    ).fetchall()
+    conn.close()
+
+    prefix = so_ky_hieu + "#"
+    by_article = {}
+    for source_key, name, kind in rows:
+        if not source_key.startswith(prefix):
+            continue
+        article = source_key[len(prefix):]
+        bucket = by_article.setdefault(article, {"primary": [], "secondary": [], "priority": []})
+        key = "priority" if kind == "priority" else ("primary" if kind == "primary" else "secondary")
+        bucket[key].append(name)
+
+    def sort_key(article):
+        return (0, int(article)) if article.isdigit() else (1, article)
+
+    return [
+        {"article": article, **by_article[article]}
+        for article in sorted(by_article, key=sort_key)
+    ]
+
+
+def set_source_keywords(source_type: str, source_key: str, primary_ids: list,
+                        secondary_ids: list, priority_ids: list = None):
     """Replaces all keyword tags for one source in one shot (delete-then-
-    insert — simpler than diffing, and this table is small per source)."""
+    insert — simpler than diffing, and this table is small per source).
+    priority_ids tags the source as directly boosted (see get_source_keywords
+    docstring) — optional, defaults to none so existing callers that only
+    manage primary/secondary are unaffected."""
     source_key = (source_key or "").strip()
     if not source_key:
         return
@@ -746,21 +874,17 @@ def set_source_keywords(source_type: str, source_key: str, primary_ids: list, se
     c.execute("DELETE FROM source_keyword WHERE source_type=? AND source_key=?", (source_type, source_key))
 
     seen = set()
-    for kid in (primary_ids or []):
+    for kid, kind in (
+        [(kid, "primary") for kid in (primary_ids or [])]
+        + [(kid, "priority") for kid in (priority_ids or [])]
+        + [(kid, "secondary") for kid in (secondary_ids or [])]
+    ):
         if kid in seen:
             continue
         seen.add(kid)
         c.execute(
             "INSERT INTO source_keyword (source_type, source_key, keyword_id, kind) VALUES (?,?,?,?)",
-            (source_type, source_key, kid, "primary")
-        )
-    for kid in (secondary_ids or []):
-        if kid in seen:
-            continue
-        seen.add(kid)
-        c.execute(
-            "INSERT INTO source_keyword (source_type, source_key, keyword_id, kind) VALUES (?,?,?,?)",
-            (source_type, source_key, kid, "secondary")
+            (source_type, source_key, kid, kind)
         )
 
     conn.commit()
@@ -768,14 +892,16 @@ def set_source_keywords(source_type: str, source_key: str, primary_ids: list, se
 
 
 def get_source_keywords_map() -> dict:
-    """{source_type: {source_key: {"primary": {name, ...}, "secondary": {name, ...}}}}
-    for every tagged source — one bulk load per ask_rag() call, used by
-    engine.rag_engine._score_doc() to boost sources whose admin-tagged
-    keywords match the question. Small table, no caching needed."""
+    """{source_type: {source_key: {"primary": {name,...}, "secondary": {...},
+    "priority": {...}}}} for every tagged source — one bulk load per
+    ask_rag() call, used by engine.rag_engine._score_doc() to boost sources
+    whose admin-tagged keywords match (priority is additive per matched
+    keyword, unlike primary/secondary's one-time bonus). Small table, no
+    caching needed."""
     conn = sqlite3.connect(DB_NAME)
     rows = conn.execute(
         """
-        SELECT sk.source_type, sk.source_key, k.name, sk.kind
+        SELECT sk.source_type, sk.source_key, k.name, sk.kind, k.status
         FROM source_keyword sk
         JOIN keyword k ON k.id = sk.keyword_id
         """
@@ -783,10 +909,21 @@ def get_source_keywords_map() -> dict:
     conn.close()
 
     result = {}
-    for source_type, source_key, name, kind in rows:
+    for source_type, source_key, name, kind, kw_status in rows:
         by_key = result.setdefault(source_type, {})
-        bucket = by_key.setdefault(source_key, {"primary": set(), "secondary": set()})
-        bucket["primary" if kind == "primary" else "secondary"].add(name.lower())
+        bucket = by_key.setdefault(source_key, {
+            "primary": set(), "secondary": set(),
+            "penalty_hard": set(), "penalty_soft": set(),
+            "priority": set(),
+        })
+        if kind == "penalty":
+            bucket["penalty_hard" if kw_status in (4, 5) else "penalty_soft"].add(name.lower())
+        elif kind == "priority":
+            bucket["priority"].add(name.lower())
+        elif kind == "primary":
+            bucket["primary"].add(name.lower())
+        else:
+            bucket["secondary"].add(name.lower())
     return result
 
 

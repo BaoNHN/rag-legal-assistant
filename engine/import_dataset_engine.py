@@ -98,6 +98,48 @@ def _parse_meta(meta_str: str) -> dict:
     return result
 
 
+# so_ky_hieu used to be hardcoded to the module-wide SO_KY_HIEU constant for
+# every row of KB_Articles_Updated/Legal_Update_2025, on the assumption the
+# whole sheet was about Luật Doanh nghiệp 2020 — but curated rows added after
+# the 168/2025/NĐ-CP decree (or referencing 67/VBHN-VPQH/76/2025/QH15) say so
+# explicitly in their own article_reference/legal_source text (e.g. "Điều 52
+# Nghị định 168/2025/NĐ-CP", "67/VBHN-VPQH 2025"), which the import silently
+# ignored. Found live 2026-07-30 (traced from ELU161/ELU170 retrieval bugs):
+# 18 chunks across both sheets were citing the wrong law/decree entirely.
+def _derive_so_ky_hieu(article_ref: str) -> str:
+    ref = (article_ref or "").lower()
+    if "168/2025" in ref or "nghị định 168" in ref:
+        return "168/2025/NĐ-CP"
+    if "67/vbhn-vpqh" in ref:
+        return "67/VBHN-VPQH"
+    if "76/2025/qh15" in ref:
+        return "76/2025/QH15"
+    return SO_KY_HIEU
+
+
+# Range-style rows (curated after the fact to cover several Điều at once, e.g.
+# "Điều 112-115 Nghị định 168/2025/NĐ-CP") store their range under an
+# "articles=" (plural) key in suggested_chunk_metadata, not "article=" —
+# looking up only the singular key silently missed these, falling through to
+# stripping every non-digit from article_reference instead, which concatenates
+# the article numbers with the decree/year digits into garbage like
+# "1121151682025" (found live 2026-07-30 alongside the so_ky_hieu bug above).
+# Whole-document references with no "Điều" at all (e.g. "Nghị định
+# 168/2025/NĐ-CP", "Luật 76/2025/QH15") correctly get "" here — they don't
+# name one specific article.
+def _derive_article_number(article_ref: str, chunk_meta: dict) -> str:
+    single = chunk_meta.get("article")
+    if single:
+        return single
+    ranged = chunk_meta.get("articles")
+    if ranged:
+        m = re.search(r"\d+", ranged)
+        if m:
+            return m.group(0)
+    m = re.search(r"Điều\s+(\d+)", article_ref or "", re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
 # ── Sheet processors (KB / curated content only — never Dataset_*/Demo_*) ─────
 def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, importer: str) -> list:
     """Process KB_Articles or KB_Articles_Updated sheet — curated legal-rule
@@ -105,7 +147,6 @@ def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, im
     from engine.rag_engine import detect_entity_type
 
     docs = []
-    nguon = f"Luật Doanh nghiệp 2020 - {sheet_name} dataset"
 
     for _, row in sheet_df.iterrows():
         article_ref = _safe(row.get('article_reference', ''))
@@ -121,8 +162,19 @@ def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, im
 
         chunk_meta  = _parse_meta(meta_str)
         chapter     = chunk_meta.get('chapter', '')
-        article_num = chunk_meta.get('article', re.sub(r'[^\d]', '', article_ref))
+        # Explicit so_ky_hieu column (2026-07-30, alongside source_url — a
+        # different field, the citation URL, not the document identifier) is
+        # authoritative when the sheet provides one — falls back to text-
+        # derivation only for older-format sheets uploaded before this column
+        # existed, so those don't suddenly stop importing.
+        so_ky_hieu  = _safe(row.get('so_ky_hieu', '')) or _derive_so_ky_hieu(article_ref)
+        article_num = _derive_article_number(article_ref, chunk_meta)
         doc_type    = chunk_meta.get('type', '')
+        # nguon_thu_thap ("collection source") is the uploaded file itself —
+        # a synthesized "{so_ky_hieu} - {sheet_name} dataset" string used to
+        # duplicate so_ky_hieu and couldn't be traced back to which upload
+        # produced it.
+        nguon       = source_file
 
         parts = [f"{article_ref}. {topic}", f"Quy tắc pháp lý: {summary}"]
         if keywords:
@@ -132,7 +184,7 @@ def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, im
         content = "\n".join(parts)
 
         meta = {
-            "so_ky_hieu":        SO_KY_HIEU,
+            "so_ky_hieu":        so_ky_hieu,
             "loai_van_ban":      LOAI_VAN_BAN,
             "nguon_thu_thap":    nguon,
             "article_reference": article_ref,
@@ -160,7 +212,9 @@ def _build_update_docs(sheet_df: pd.DataFrame, source_file: str, importer: str) 
     changes, not test Q&A pairs, so safe to index.
     Actual columns: update_id, date/effective, legal_source,
                     key_change_vi, impact_on_dataset, implemented_in_sheet,
-                    source_url, notes
+                    source_url, notes, so_ky_hieu (optional, 2026-07-30 —
+                    explicit document identifier; falls back to parsing
+                    legal_source's text if omitted, see _derive_so_ky_hieu)
     """
     from engine.rag_engine import detect_entity_type
 
@@ -196,12 +250,13 @@ def _build_update_docs(sheet_df: pd.DataFrame, source_file: str, importer: str) 
             continue
 
         content     = "\n".join(parts)
-        article_num = re.sub(r'[^\d]', '', article_ref) if article_ref else ''
+        so_ky_hieu  = _safe(row.get('so_ky_hieu', '')) or _derive_so_ky_hieu(article_ref)
+        article_num = _derive_article_number(article_ref, {})
 
         meta = {
-            "so_ky_hieu":        SO_KY_HIEU,
+            "so_ky_hieu":        so_ky_hieu,
             "loai_van_ban":      LOAI_VAN_BAN,
-            "nguon_thu_thap":    "Legal_Update_2025",
+            "nguon_thu_thap":    source_file,
             "article_reference": article_ref,
             "article_number":    article_num,
             "topic":             topic,

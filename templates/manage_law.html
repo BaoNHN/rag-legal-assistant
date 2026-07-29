@@ -66,7 +66,7 @@ nav .logo {
 main {
   flex: 1;
   padding: 36px 24px;
-  max-width: 900px;
+  max-width: 1400px;
   margin: 0 auto;
   width: 100%;
 }
@@ -182,8 +182,38 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 .btn-action:disabled { opacity: .4; cursor: not-allowed; }
 .btn-toggle-on  { background: rgba(29,155,108,0.12); color: var(--green); border-color: rgba(29,155,108,0.3); }
 .btn-toggle-off { background: rgba(255,255,255,0.07); color: var(--gray); border-color: var(--border); }
+.btn-change-type { background: rgba(232,160,32,0.12); color: var(--gold); border-color: rgba(232,160,32,0.3); margin-left: 6px; }
+.btn-change-type:hover:not(:disabled) { background: rgba(232,160,32,0.22); }
 
 /* ── Từ khóa tab ── */
+.kw-layout { display: flex; gap: 28px; align-items: flex-start; }
+.kw-main { flex: 1; min-width: 0; }
+.kw-explain-panel { width: 400px; flex-shrink: 0; }
+.kw-explain-panel h3 {
+  font-family: 'Crimson Pro', serif; font-size: 17px; font-weight: 600; color: var(--teal2);
+  margin-bottom: 6px; display: flex; align-items: center; gap: 6px;
+}
+.kw-explain-panel > p { font-size: 12.5px; color: var(--gray); margin-bottom: 14px; line-height: 1.6; }
+@media (max-width: 980px) {
+  .kw-layout { flex-direction: column; }
+  .kw-explain-panel { width: 100%; }
+}
+
+.schema-card { background: var(--navy2); border-radius: 10px; border: 1px solid rgba(255,255,255,0.07); margin-bottom: 12px; overflow: hidden; }
+.schema-card .schema-header {
+  padding: 9px 13px; background: rgba(13,180,162,0.08); border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 12.5px; font-weight: 600; color: var(--teal2); display: flex; align-items: center; gap: 6px;
+}
+.schema-body { padding: 10px 13px; }
+.schema-field { display: flex; gap: 8px; font-size: 11.5px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.schema-field:last-child { border: none; }
+.schema-field .sf-name { color: var(--teal2); font-weight: 500; flex: 0 0 auto; min-width: 78px; }
+.schema-field .sf-desc { color: var(--gray); }
+.template-note {
+  font-size: 11.5px; color: var(--gray); line-height: 1.6; background: rgba(232,160,32,0.06);
+  border: 1px solid rgba(232,160,32,0.15); border-radius: 10px; padding: 12px 14px; margin-top: 4px;
+}
+
 .kw-add-form { display: flex; gap: 10px; margin-bottom: 16px; }
 .kw-add-form input {
   flex: 1; padding: 10px 13px;
@@ -230,6 +260,14 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 .kw-type-badge { padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
 .kw-type-scoring { background: rgba(13,180,162,0.15); color: var(--teal2); }
 .kw-type-oos      { background: rgba(232,160,32,0.15); color: var(--gold); }
+.kw-type-priority { background: rgba(29,155,108,0.15); color: var(--green); }
+.kw-type-select {
+  margin-left: 6px; padding: 6px 10px; border-radius: 7px; font-size: 12px;
+  background: rgba(255,255,255,0.05); border: 1.5px solid var(--border); color: var(--white);
+  font-family: 'DM Sans', sans-serif;
+  color-scheme: dark;
+}
+.kw-type-select option { background: var(--navy2); color: var(--white); }
 .kw-pagination {
   display: flex; align-items: center; justify-content: center; gap: 14px;
   padding: 14px 18px;
@@ -301,7 +339,7 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 }
 .modal-overlay.open { display: flex; }
 .modal-box {
-  width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto;
+  width: 100%; max-width: 792px; max-height: 88vh; overflow-y: auto;
   background: var(--navy2);
   border-radius: 16px;
   border: 1px solid rgba(255,255,255,0.1);
@@ -317,9 +355,38 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 .modal-info-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; margin-bottom: 18px; }
 .modal-info-grid dt { color: var(--gray); }
 .modal-info-grid dd { color: var(--white); overflow-wrap: anywhere; }
+.field-hint { font-weight: 400; text-transform: none; letter-spacing: normal; font-size: 11.5px; color: var(--gray); opacity: .8; }
 .modal-box label { display: block; font-size: 12px; font-weight: 500; color: var(--gray); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
 .modal-box .error-msg { display: none; color: var(--red); font-size: 12px; font-weight: 500; margin-top: 4px; margin-bottom: 8px; }
 .modal-field { margin-bottom: 16px; }
+.modal-field-hint { font-size: 11.5px; color: var(--gray); margin-top: 6px; line-height: 1.5; }
+.tagged-articles-list {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;
+  max-height: 120px; overflow-y: auto; padding: 8px;
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px;
+}
+.tal-empty { font-size: 12.5px; color: var(--text-dim, #9aa); padding: 2px; }
+.tal-row {
+  display: flex; align-items: center; gap: 6px; padding: 5px 10px;
+  background: rgba(13,180,162,0.10); border: 1px solid rgba(13,180,162,0.25);
+  border-radius: 999px; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.tal-row:hover { background: rgba(13,180,162,0.2); }
+.tal-dieu { font-weight: 600; color: var(--teal2); }
+.tal-count { color: var(--text-dim, #9aa); }
+.article-scope-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.article-scope-row input {
+  width: 140px; padding: 9px 12px; background: rgba(255,255,255,0.05);
+  border: 1.5px solid var(--border); border-radius: 8px; color: var(--white);
+  font-size: 13px; font-family: 'DM Sans', sans-serif;
+}
+.article-scope-row input:focus { outline: none; border-color: var(--teal2); }
+.btn-load-article {
+  padding: 9px 16px; background: rgba(13,180,162,0.12); color: var(--teal2);
+  border: 1.5px solid rgba(13,180,162,0.3); border-radius: 8px; font-size: 12.5px;
+  font-weight: 600; cursor: pointer; font-family: 'DM Sans', sans-serif; white-space: nowrap;
+}
+.btn-load-article:hover { background: rgba(13,180,162,0.22); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .btn-modal-submit {
   padding: 10px 22px; background: var(--teal); color: var(--white);
@@ -446,18 +513,14 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 
   <!-- ══ Từ khóa (admin-only) ══ -->
   <div class="tab-panel" id="panelKeyword">
-    <p class="tab-desc">
-      <strong>Từ khóa chấm điểm nguồn</strong> dùng để tính điểm ưu tiên nguồn khi trả lời — gắn cho
-      từng văn bản ở tab "Văn bản pháp luật" (nút Xem thông tin) hoặc ngay khi import.
-      <strong>Từ khóa chặn ngoài phạm vi</strong> dùng để nhận diện câu hỏi không thuộc Luật Doanh
-      nghiệp/Thương mại và từ chối trả lời. Vô hiệu hoá một từ khóa chỉ ẩn nó khỏi nơi đang dùng
-      (danh sách chọn mới / bộ lọc chặn), không xoá khỏi các văn bản đã gắn.
-    </p>
+    <div class="kw-layout">
+      <div class="kw-main">
     <div class="kw-add-form">
-      <input type="text" id="newKeywordName" placeholder="Tên từ khóa mới, ví dụ: hộ kinh doanh"/>
+      <input type="text" id="newKeywordName" maxlength="50" placeholder="Tên từ khóa mới, ví dụ: hộ kinh doanh (tối đa 50 ký tự)"/>
       <select id="newKeywordType">
         <option value="scoring">Chấm điểm nguồn</option>
         <option value="oos">Chặn ngoài phạm vi</option>
+        <option value="priority">Tăng ưu tiên</option>
       </select>
       <button id="btnAddKeyword" onclick="addKeyword()">＋ Thêm từ khóa</button>
     </div>
@@ -469,6 +532,45 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
       </table>
       <div class="kw-pagination" id="keywordPagination"></div>
     </div>
+      </div><!-- /kw-main -->
+
+      <div class="kw-explain-panel">
+        <h3>📖 Các loại từ khóa</h3>
+        <p>Tất cả từ khóa chỉ nhằm một việc: giúp hệ thống nhận ra câu hỏi đang nói tới văn bản/Điều nào,
+        để chọn đúng nội dung và trả lời chính xác hơn.</p>
+
+        <div class="schema-card">
+          <div class="schema-header">🟢 Chấm điểm nguồn (theo Điều)</div>
+          <div class="schema-body">
+            <div class="schema-field"><span class="sf-name">Tác dụng</span><span class="sf-desc">Giúp hệ thống nhận ra đúng Điều khi câu hỏi khớp nguyên văn từ khóa — chỉ áp dụng cho một Điều cụ thể, không áp dụng cho cả văn bản</span></div>
+            <div class="schema-field"><span class="sf-name">Vì sao theo Điều</span><span class="sf-desc">Một văn bản có nhiều Điều — gắn cho cả văn bản không phân biệt được Điều nào đúng, Điều nào sai khi 2 Điều cùng văn bản cạnh tranh nhau</span></div>
+            <div class="schema-field"><span class="sf-name">Gắn ở đâu</span><span class="sf-desc">Tab "Văn bản pháp luật" → Xem thông tin → nhập số Điều → Từ khóa cho Điều này</span></div>
+          </div>
+        </div>
+
+        <div class="schema-card">
+          <div class="schema-header">🚫 Chặn ngoài phạm vi</div>
+          <div class="schema-body">
+            <div class="schema-field"><span class="sf-name">Tác dụng</span><span class="sf-desc">Nhận diện câu hỏi ngoài Luật Doanh nghiệp/Thương mại để từ chối trả lời</span></div>
+            <div class="schema-field"><span class="sf-name">Gắn ở đâu</span><span class="sf-desc">Không cần gắn cho văn bản — tự áp dụng lên mọi câu hỏi</span></div>
+          </div>
+        </div>
+
+        <div class="schema-card">
+          <div class="schema-header">🔺 Tăng ưu tiên</div>
+          <div class="schema-body">
+            <div class="schema-field"><span class="sf-name">Tác dụng</span><span class="sf-desc">Giúp hệ thống nhận ra và ưu tiên đúng văn bản khi câu hỏi khớp nguyên văn từ khóa — mỗi từ khóa khớp được cộng dồn, gắn càng nhiều càng chắc thắng</span></div>
+            <div class="schema-field"><span class="sf-name">Dùng khi</span><span class="sf-desc">Cần đẩy một văn bản cụ thể lên khi đang thua văn bản khác (VD: văn bản hợp nhất hiện hành nên thắng bản luật gốc)</span></div>
+            <div class="schema-field"><span class="sf-name">Gắn ở đâu</span><span class="sf-desc">Xem thông tin → Từ khóa tăng ưu tiên (áp dụng cho cả văn bản; tăng ưu tiên riêng cho 1 Điều cụ thể hiện chưa có ở giao diện này)</span></div>
+          </div>
+        </div>
+
+        <div class="template-note">
+          💡 Vô hiệu hoá một từ khóa chỉ ẩn nó khỏi danh sách chọn mới (từ khóa chính/phụ/giảm/tăng ưu tiên) —
+          không xoá khỏi các văn bản đã gắn từ trước, chúng vẫn tiếp tục có hiệu lực.
+        </div>
+      </div><!-- /kw-explain-panel -->
+    </div>
   </div>
 </main>
 
@@ -477,29 +579,46 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
   <div class="modal-box">
     <h2>Thông tin văn bản <button class="modal-close" onclick="closeInfoModal()">✕</button></h2>
     <dl class="modal-info-grid">
-      <dt>Số ký hiệu</dt><dd id="miSourceKey">–</dd>
-      <dt>Loại văn bản</dt><dd id="miLoaiVanBan">–</dd>
-      <dt>Nguồn thu thập</dt><dd id="miNguonThuThap">–</dd>
-      <dt>Đoạn trong database</dt><dd id="miChunkCount">–</dd>
-      <dt>Người nhập</dt><dd id="miImporter">–</dd>
+      <dt>Số ký hiệu <span class="field-hint">— mã định danh văn bản (VD: 59/2020/QH14, 67/VBHN-VPQH)</span></dt><dd id="miSourceKey">–</dd>
+      <dt>Loại văn bản <span class="field-hint">— Luật / Nghị định / Văn bản hợp nhất…</span></dt><dd id="miLoaiVanBan">–</dd>
+      <dt>Nguồn thu thập <span class="field-hint">— nơi lấy dữ liệu văn bản này</span></dt><dd id="miNguonThuThap">–</dd>
+      <dt>Đoạn trong database <span class="field-hint">— số đoạn (chunk) của văn bản này đã nạp vào ChromaDB</span></dt><dd id="miChunkCount">–</dd>
+      <dt>Người nhập <span class="field-hint">— tài khoản đã import văn bản này</span></dt><dd id="miImporter">–</dd>
     </dl>
 
     <div class="modal-field">
-      <label>Từ khóa chính <span style="color:var(--red)">*</span></label>
-      <div class="tag-picker">
-        <input type="text" class="tag-picker-search" id="miPrimaryKeywordSearch" placeholder="🔍 Tìm từ khóa…"/>
-        <select id="miPrimaryKeywordSelect"><option value="">Đang tải danh sách…</option></select>
-        <div class="tag-chips" id="miPrimaryKeywordChips"></div>
+      <label>Tăng ưu tiên theo Điều</label>
+      <div class="tagged-articles-list" id="miTaggedArticlesList"></div>
+      <div class="article-scope-row">
+        <input type="text" id="miArticleNumber" placeholder="Số Điều, VD: 77" maxlength="10" oninput="onArticleNumberChanged()" list="miValidArticlesList"/>
+        <datalist id="miValidArticlesList"></datalist>
+        <button type="button" class="btn-load-article" id="btnLoadArticle" onclick="loadArticleKeywords()">Tải từ khóa Điều này</button>
       </div>
-      <div class="error-msg" id="errMiPrimaryKeyword">Vui lòng chọn ít nhất 1 Từ khóa chính</div>
+      <div class="tag-picker" id="miArticleKeywordWrap" style="display:none;">
+        <input type="text" class="tag-picker-search" id="miArticleKeywordSearch" placeholder="🔍 Tìm từ khóa…"/>
+        <select id="miArticleKeywordSelect"><option value="">Đang tải danh sách…</option></select>
+        <div class="tag-chips" id="miArticleKeywordChips"></div>
+      </div>
+      <div class="modal-field-hint">
+        Nhập số Điều (chỉ nhận số Điều có thật trong văn bản này) rồi bấm "Tải từ khóa Điều này" — từ khóa
+        chọn ở đây lấy từ kho "Chấm điểm nguồn" nhưng <strong>tính điểm +15/khớp, cộng dồn</strong> nếu khớp
+        nhiều từ khóa, và <strong>chỉ áp dụng cho đúng Điều đó</strong>, không ảnh hưởng các Điều khác cùng
+        văn bản. Dùng khi 2 Điều cùng văn bản đang cạnh tranh nhau mà 1 Điều đúng, 1 Điều sai. Để trống nếu
+        văn bản này chưa cần phân biệt theo Điều.
+      </div>
     </div>
 
     <div class="modal-field">
-      <label>Từ khóa phụ</label>
+      <label>Từ khóa tăng ưu tiên (priority)</label>
       <div class="tag-picker">
-        <input type="text" class="tag-picker-search" id="miSecondaryKeywordSearch" placeholder="🔍 Tìm từ khóa…"/>
-        <select id="miSecondaryKeywordSelect"><option value="">Đang tải danh sách…</option></select>
-        <div class="tag-chips" id="miSecondaryKeywordChips"></div>
+        <input type="text" class="tag-picker-search" id="miPriorityKeywordSearch" placeholder="🔍 Tìm từ khóa…"/>
+        <select id="miPriorityKeywordSelect"><option value="">Đang tải danh sách…</option></select>
+        <div class="tag-chips" id="miPriorityKeywordChips"></div>
+      </div>
+      <div class="modal-field-hint">
+        Gắn văn bản này là "tăng ưu tiên" — CHỈ cộng điểm khi từ khóa khớp nguyên văn với câu hỏi (khác với
+        "giảm ưu tiên" là áp dụng cho mọi câu hỏi). Có thể gắn nhiều từ khóa — mỗi từ khóa khớp được cộng
+        dồn điểm riêng, không phải chỉ tính 1 lần, nên gắn thêm từ khóa nếu cần tăng thêm mức ưu tiên.
       </div>
     </div>
 
@@ -855,21 +974,135 @@ function createTagPicker(selectId, chipsId, searchId) {
   };
 }
 
-const miPrimaryKeywordPicker   = createTagPicker('miPrimaryKeywordSelect', 'miPrimaryKeywordChips', 'miPrimaryKeywordSearch');
-const miSecondaryKeywordPicker = createTagPicker('miSecondaryKeywordSelect', 'miSecondaryKeywordChips', 'miSecondaryKeywordSearch');
+const miArticleKeywordPicker   = createTagPicker('miArticleKeywordSelect', 'miArticleKeywordChips', 'miArticleKeywordSearch');
+const miPriorityKeywordPicker  = createTagPicker('miPriorityKeywordSelect', 'miPriorityKeywordChips', 'miPriorityKeywordSearch');
 let miActiveKeywordsLoaded = false;
 let miCurrentSourceKey  = null;
+let miArticleKeywordsLoadedFor = null; // which article number the picker currently reflects
+let miValidArticles = []; // article numbers that actually exist in this source's chunks
 
 async function ensureActiveKeywordsLoaded() {
   if (miActiveKeywordsLoaded) return;
   try {
-    const res  = await fetch('/list_active_keywords');
-    const data = await res.json();
-    const list = Array.isArray(data) ? data : [];
-    miPrimaryKeywordPicker.setOptions(list);
-    miSecondaryKeywordPicker.setOptions(list);
+    // Article-level tagging ("Tăng ưu tiên theo Điều") draws its options from
+    // the same "Chấm điểm nguồn" pool as before the 2026-07-29 merge — only
+    // the scoring math changed (now always +15/match, see _score_doc), not
+    // which keywords are selectable there. Document-level priority keeps its
+    // own separate pool/endpoint.
+    const [boostData, priorityData] = await Promise.all([
+      fetch('/list_active_keywords').then(r => r.json()),
+      fetch('/list_active_priority_keywords').then(r => r.json()),
+    ]);
+    const boostList    = Array.isArray(boostData)    ? boostData    : [];
+    const priorityList = Array.isArray(priorityData) ? priorityData : [];
+    miArticleKeywordPicker.setOptions(boostList);
+    miPriorityKeywordPicker.setOptions(priorityList);
     miActiveKeywordsLoaded = true;
   } catch (e) { /* pickers stay empty, submit will fail loudly */ }
+}
+
+// Fetches the list of article numbers that actually exist in this source's
+// ChromaDB chunks, so the Điều-number input can only accept real values
+// instead of any arbitrary number (2026-07-29 UX request) — populates a
+// <datalist> for autocomplete and is also checked before "Tải từ khóa Điều
+// này" is allowed to proceed.
+async function loadValidArticlesList() {
+  miValidArticles = [];
+  try {
+    const res  = await fetch('/list_source_articles?source_key=' + encodeURIComponent(miCurrentSourceKey));
+    const data = await res.json();
+    miValidArticles = data.articles || [];
+    document.getElementById('miValidArticlesList').innerHTML =
+      miValidArticles.map(a => `<option value="${a}"></option>`).join('');
+  } catch (e) { /* datalist stays empty; load button still validates against miValidArticles (empty = reject) */ }
+}
+
+// Typing a different Điều number than what's loaded hides the stale picker
+// (rather than leaving it showing the PREVIOUS Điều's tags under a changed
+// number) until "Tải từ khóa Điều này" is clicked again for the new value.
+function onArticleNumberChanged() {
+  const dieuSo = document.getElementById('miArticleNumber').value.trim();
+  if (dieuSo !== miArticleKeywordsLoadedFor) {
+    document.getElementById('miArticleKeywordWrap').style.display = 'none';
+  }
+}
+
+// Shows every Điều of the current source that already has at least one tag,
+// so the admin can see what's tagged at a glance instead of having to guess/
+// type article numbers one at a time to find out (2026-07-29 UX request —
+// this is exactly what made the ELU177/178 mistagging invisible until a user
+// stumbled onto it). Clicking a row loads that Điều into the picker below.
+async function loadTaggedArticlesList() {
+  const el = document.getElementById('miTaggedArticlesList');
+  el.innerHTML = '<div class="tal-empty">Đang tải…</div>';
+  try {
+    const res  = await fetch('/list_tagged_articles?source_key=' + encodeURIComponent(miCurrentSourceKey));
+    const data = await res.json();
+    const articles = data.articles || [];
+    if (articles.length === 0) {
+      el.innerHTML = '<div class="tal-empty">Chưa có Điều nào được gắn từ khóa/ưu tiên.</div>';
+      return;
+    }
+    el.innerHTML = articles.map(a => {
+      const total = a.primary.length + a.secondary.length + a.priority.length;
+      return `<div class="tal-row" data-dieu="${a.article}" onclick="selectTaggedArticle('${a.article}')">
+        <span class="tal-dieu">Điều ${a.article}</span>
+        <span class="tal-count">${total} từ khóa</span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div class="tal-empty">Không tải được danh sách.</div>';
+  }
+}
+
+function selectTaggedArticle(dieuSo) {
+  document.getElementById('miArticleNumber').value = dieuSo;
+  onArticleNumberChanged();
+  loadArticleKeywords();
+}
+
+// Fetches and shows the merged primary+secondary+priority tags for whichever
+// Điều number is currently typed into #miArticleNumber — separate from the
+// rest of the modal because these tags are scoped to (so_ky_hieu,
+// article_number), not the whole document, so they have to be loaded/saved
+// per Điều instead of once when the modal opens.
+//
+// All three DB kinds are merged into one picker (2026-07-29 merge: "Chấm
+// điểm nguồn theo Điều" and "Tăng ưu tiên theo Điều" used to be two separate
+// sections/mechanisms; _score_doc now scores every article-level tag the
+// same way regardless of which kind it was saved under, including tags made
+// before this merge — see that comment) — this also fixes a case where a
+// tag saved as article-level PRIORITY was invisible in a picker that only
+// ever read primary/secondary (ELU177/178, 2026-07-29 user report).
+async function loadArticleKeywords() {
+  const dieuSo = document.getElementById('miArticleNumber').value.trim();
+  const wrap   = document.getElementById('miArticleKeywordWrap');
+  if (!dieuSo || !miCurrentSourceKey) {
+    wrap.style.display = 'none';
+    miArticleKeywordsLoadedFor = null;
+    return;
+  }
+  if (miValidArticles.length && !miValidArticles.includes(dieuSo)) {
+    alert('❌ Điều ' + dieuSo + ' không tồn tại trong văn bản này.');
+    wrap.style.display = 'none';
+    miArticleKeywordsLoadedFor = null;
+    return;
+  }
+  try {
+    const res = await fetch(
+      '/get_article_keywords?source_key=' + encodeURIComponent(miCurrentSourceKey) +
+      '&article_number=' + encodeURIComponent(dieuSo)
+    );
+    const kw = await res.json();
+    const merged = [...(kw.primary || []), ...(kw.secondary || []), ...(kw.priority || [])];
+    merged.forEach(k => miArticleKeywordPicker.addOptionIfMissing(k));
+    miArticleKeywordPicker.setSelected(merged.map(k => k.id));
+    wrap.style.display = 'block';
+
+    miArticleKeywordsLoadedFor = dieuSo;
+  } catch (e) {
+    alert('❌ Không tải được từ khóa cho Điều ' + dieuSo + ': ' + e.message);
+  }
 }
 
 // ── Modal: Xem thông tin văn bản — Law only. Dataset/Scenario are
@@ -885,8 +1118,10 @@ async function viewLawInfo(btn) {
 
   document.getElementById('modalMsg').className = 'modal-msg';
   document.getElementById('modalMsg').textContent = '';
-  document.getElementById('errMiPrimaryKeyword').style.display = 'none';
-  document.getElementById('miPrimaryKeywordSelect').classList.remove('error');
+  document.getElementById('miArticleNumber').value = '';
+  document.getElementById('miArticleKeywordWrap').style.display = 'none';
+  miArticleKeywordPicker.clear();
+  miArticleKeywordsLoadedFor = null;
 
   try {
     const res  = await fetch('/get_source_info?source_type=law&source_key=' + encodeURIComponent(source_key));
@@ -901,18 +1136,18 @@ async function viewLawInfo(btn) {
     document.getElementById('miChunkCount').textContent   = (info.chunk_count ?? '–') + ' đoạn';
     document.getElementById('miImporter').textContent     = info.importer || '–';
 
-    const kw = info.keywords || { primary: [], secondary: [] };
-    // A keyword already tagged to this source might be disabled (absent
-    // from /list_active_keywords) — add it into both pickers' option pools
-    // so it still renders as a removable chip instead of a bare id.
-    [...kw.primary, ...kw.secondary].forEach(k => {
-      miPrimaryKeywordPicker.addOptionIfMissing(k);
-      miSecondaryKeywordPicker.addOptionIfMissing(k);
-    });
-    miPrimaryKeywordPicker.setSelected(kw.primary.map(k => k.id));
-    miSecondaryKeywordPicker.setSelected(kw.secondary.map(k => k.id));
+    // Document-level tags now only ever hold priority (primary/secondary
+    // were retired at this scope 2026-07-29; penalty was tried and removed
+    // entirely the same day) — but still merge in any that predate the
+    // retirement so they render as removable chips instead of silently
+    // vanishing.
+    const kw = info.keywords || { primary: [], secondary: [], priority: [] };
+    (kw.priority || []).forEach(k => miPriorityKeywordPicker.addOptionIfMissing(k));
+    miPriorityKeywordPicker.setSelected((kw.priority || []).map(k => k.id));
 
     document.getElementById('infoModal').classList.add('open');
+    loadTaggedArticlesList();
+    loadValidArticlesList();
   } catch (e) {
     alert('❌ ' + e.message);
   }
@@ -921,22 +1156,15 @@ async function viewLawInfo(btn) {
 function closeInfoModal() {
   document.getElementById('infoModal').classList.remove('open');
   miCurrentSourceKey = null;
-  miPrimaryKeywordPicker.clearSearch();
-  miSecondaryKeywordPicker.clearSearch();
+  miArticleKeywordsLoadedFor = null;
+  miArticleKeywordPicker.clearSearch();
+  miPriorityKeywordPicker.clearSearch();
 }
 
 async function submitSourceKeywords() {
   if (!miCurrentSourceKey) return;
-  const primaryIds   = miPrimaryKeywordPicker.getSelectedIds();
-  const secondaryIds = miSecondaryKeywordPicker.getSelectedIds();
-
-  document.getElementById('errMiPrimaryKeyword').style.display = 'none';
-  document.getElementById('miPrimaryKeywordSelect').classList.remove('error');
-  if (primaryIds.length === 0) {
-    document.getElementById('errMiPrimaryKeyword').style.display = 'block';
-    document.getElementById('miPrimaryKeywordSelect').classList.add('error');
-    return;
-  }
+  const priorityIds = miPriorityKeywordPicker.getSelectedIds();
+  const dieuSo      = document.getElementById('miArticleNumber').value.trim();
 
   const btn = document.getElementById('btnSubmitKeywords');
   btn.disabled = true; btn.textContent = 'Đang lưu…';
@@ -944,19 +1172,48 @@ async function submitSourceKeywords() {
   msgEl.className = 'modal-msg';
 
   try {
-    const res  = await fetch('/update_source_keywords', {
+    // Document-level: priority only (primary/secondary retired here; penalty
+    // removed entirely 2026-07-29).
+    const res = await fetch('/update_source_keywords', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         source_type: 'law',
         source_key: miCurrentSourceKey,
-        primary_keyword_ids: primaryIds,
-        secondary_keyword_ids: secondaryIds,
+        primary_keyword_ids: [],
+        secondary_keyword_ids: [],
+        priority_keyword_ids: priorityIds,
       })
     });
     const data = await res.json();
     if (data.status !== 'ok') throw new Error(data.message || 'Lỗi không xác định');
+
+    // Article-level: only if a Điều number was entered AND its keywords were
+    // actually loaded first (avoids silently wiping an untouched Điều's tags
+    // if the admin never clicked "Tải từ khóa Điều này").
+    if (dieuSo && miArticleKeywordsLoadedFor === dieuSo) {
+      // All merged into one picker now (2026-07-29) — saved as priority_ids
+      // since every article-level tag scores the same +15/match way
+      // regardless of which kind bucket it's stored under (see _score_doc).
+      const articleIds = miArticleKeywordPicker.getSelectedIds();
+      const res2 = await fetch('/update_source_keywords', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_type: 'law_article',
+          source_key: miCurrentSourceKey + '#' + dieuSo,
+          primary_keyword_ids: [],
+          secondary_keyword_ids: [],
+          priority_keyword_ids: articleIds,
+        })
+      });
+      const data2 = await res2.json();
+      if (data2.status !== 'ok') throw new Error(data2.message || 'Lỗi không xác định (Điều ' + dieuSo + ')');
+    } else if (dieuSo && miArticleKeywordsLoadedFor !== dieuSo) {
+      throw new Error('Đã nhập số Điều nhưng chưa bấm "Tải từ khóa Điều này" — từ khóa theo Điều KHÔNG được lưu.');
+    }
+
     msgEl.textContent = '✅ Đã lưu từ khóa thành công.';
     msgEl.className = 'modal-msg ok';
+    loadTaggedArticlesList();
   } catch (e) {
     msgEl.textContent = '❌ ' + e.message;
     msgEl.className = 'modal-msg err';
@@ -966,30 +1223,52 @@ async function submitSourceKeywords() {
 }
 
 // ── Từ khóa (admin) ──
-// status: 0=chấm điểm/đang dùng, 1=chấm điểm/đã tắt, 2=chặn ngoài phạm vi/
-// đang dùng, 3=chặn ngoài phạm vi/đã tắt (see database.database's
-// KEYWORD_STATUS_* constants). Toggle flips within the same pair (0↔1 or 2↔3).
+// status = typeIndex*2 + (active?0:1) — independent (active,disabled) pairs
+// (see database.database's KEYWORD_STATUS_* constants):
+//   0/1 = Chấm điểm nguồn   2/3 = Chặn ngoài phạm vi   8/9 = Tăng ưu tiên
+// typeIndex 2 (status 4-7, formerly "Giảm ưu tiên") is retired (2026-07-29)
+// and intentionally has no entry below — a keyword can't be created or
+// switched into it anymore. Keyed by typeIndex (not a dense array) so the
+// gap doesn't need a placeholder.
+// The "Tắt/Bật" toggle only flips active/disabled within the current type.
+// "Đổi loại" (a <select>) switches type while preserving whichever
+// active/disabled bit was already set.
+const KEYWORD_TYPE_INFO = {
+  0: { cls: 'kw-type-scoring',  text: 'Chấm điểm nguồn' },
+  1: { cls: 'kw-type-oos',      text: 'Chặn ngoài phạm vi' },
+  4: { cls: 'kw-type-priority', text: 'Tăng ưu tiên' },
+};
 let allKeywordsCache = [];
 let keywordPage = 1;
 const KEYWORDS_PER_PAGE = 10;
 
 function renderKeywordRow(k) {
-  const isOos      = k.status >= 2;
+  const typeIdx    = Math.floor(k.status / 2);
   const isActive   = k.status % 2 === 0;
-  const typeClass  = isOos ? 'kw-type-oos' : 'kw-type-scoring';
-  const typeText   = isOos ? 'Chặn ngoài phạm vi' : 'Chấm điểm nguồn';
+  const info       = KEYWORD_TYPE_INFO[typeIdx] || { cls: 'kw-type-scoring', text: '?' };
   const badgeClass = isActive ? 'kw-status-active' : 'kw-status-disabled';
   const badgeText  = isActive ? 'Đang dùng' : 'Đã tắt';
   const toggleClass = isActive ? 'btn-toggle-off' : 'btn-toggle-on';
   const toggleText  = isActive ? 'Tắt' : 'Bật';
-  const base       = isOos ? 2 : 0;
-  const nextStatus = isActive ? base + 1 : base;
+  const nextStatus  = typeIdx * 2 + (isActive ? 1 : 0);
+
+  const typeOptions = Object.keys(KEYWORD_TYPE_INFO).map(i => {
+    const idx = Number(i);
+    const newStatus = idx * 2 + (isActive ? 0 : 1); // preserve active/disabled bit
+    return `<option value="${newStatus}" ${idx === typeIdx ? 'selected' : ''}>${KEYWORD_TYPE_INFO[idx].text}</option>`;
+  }).join('');
+
   return `
     <tr>
       <td>${escapeHtml(k.name)}</td>
-      <td><span class="kw-type-badge ${typeClass}">${typeText}</span></td>
+      <td><span class="kw-type-badge ${info.cls}">${info.text}</span></td>
       <td><span class="kw-status-badge ${badgeClass}">${badgeText}</span></td>
-      <td><button class="btn-action ${toggleClass}" onclick="toggleKeyword(${k.id}, ${nextStatus})">${toggleText}</button></td>
+      <td>
+        <button class="btn-action ${toggleClass}" onclick="toggleKeyword(${k.id}, ${nextStatus})">${toggleText}</button>
+        <select class="kw-type-select" onchange="changeKeywordType(${k.id}, this.value, '${escapeHtml(k.name).replace(/'/g, "\\'")}')">
+          ${typeOptions}
+        </select>
+      </td>
     </tr>`;
 }
 
@@ -1031,7 +1310,7 @@ function onKeywordSearchInput() {
   renderKeywordTable();
 }
 
-async function loadKeywords() {
+async function loadKeywords(resetPage = true) {
   loaded.keyword = true;
   document.getElementById('loadError').style.display = 'none';
   try {
@@ -1039,7 +1318,11 @@ async function loadKeywords() {
     if (res.status === 403) { window.location.href = '/'; return; }
     const data = await res.json();
     allKeywordsCache = Array.isArray(data) ? data : [];
-    keywordPage = 1;
+    // Only the initial load / a new search should jump back to page 1 —
+    // refreshing after a toggle/type-change (resetPage=false) must stay on
+    // the page the admin was looking at, otherwise every click bounces back
+    // to page 1 and reads as if the wrong row changed (user report, 2026-07-29).
+    if (resetPage) keywordPage = 1;
     renderKeywordTable();
   } catch (e) {
     showLoadError('❌ Lỗi tải danh sách từ khóa: ' + e.message);
@@ -1047,18 +1330,18 @@ async function loadKeywords() {
 }
 
 async function addKeyword() {
-  const input       = document.getElementById('newKeywordName');
-  const typeSelect  = document.getElementById('newKeywordType');
-  const name        = input.value.trim();
+  const input      = document.getElementById('newKeywordName');
+  const typeSelect = document.getElementById('newKeywordType');
+  const name       = input.value.trim();
   if (!name) return;
-  const isOutOfScope = typeSelect.value === 'oos';
+  const kind = typeSelect.value; // "scoring" | "oos" | "priority"
 
   const btn = document.getElementById('btnAddKeyword');
   btn.disabled = true;
   try {
     const res  = await fetch('/add_keyword', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, is_out_of_scope: isOutOfScope })
+      body: JSON.stringify({ name, kind })
     });
     const data = await res.json();
     if (data.status !== 'ok') throw new Error(data.message || 'Lỗi không xác định');
@@ -1081,9 +1364,31 @@ async function toggleKeyword(id, newStatus) {
     const data = await res.json();
     if (data.status !== 'ok') throw new Error(data.message || 'Lỗi không xác định');
     miActiveKeywordsLoaded = false; // next modal open re-fetches the fresh list
-    loadKeywords();
+    loadKeywords(false); // stay on the current page
   } catch (e) {
     alert('❌ ' + e.message);
+  }
+}
+
+async function changeKeywordType(id, newStatus, name) {
+  const typeIdx = Math.floor(Number(newStatus) / 2);
+  const newTypeText = (KEYWORD_TYPE_INFO[typeIdx] || {}).text || '?';
+  if (!confirm(`Đổi loại từ khóa "${name}" sang "${newTypeText}"?`)) {
+    renderKeywordTable(); // revert the <select> back to its actual current value
+    return;
+  }
+  try {
+    const res  = await fetch('/toggle_keyword_status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: Number(newStatus) })
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') throw new Error(data.message || 'Lỗi không xác định');
+    miActiveKeywordsLoaded = false;
+    loadKeywords(false); // stay on the current page
+  } catch (e) {
+    alert('❌ ' + e.message);
+    renderKeywordTable();
   }
 }
 

@@ -98,6 +98,12 @@ Tạo file `groqkey.txt` tại thư mục gốc dự án, dán API key vào:
 gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+Có thể dán **nhiều key**, phân tách bằng `;`, để hệ thống tự xoay vòng khi một key bị rate-limit (xem `engine/groq_keys.py`):
+
+```
+gsk_key_thu_nhat;gsk_key_thu_hai;gsk_key_thu_ba
+```
+
 ### 2.4 Kiểm Tra Nhanh
 
 ```bash
@@ -341,11 +347,33 @@ Tại trang `/import`, nhấn tab **"📊 Import Dataset"**.
 3. Lưu file .xlsx gốc vào thư mục Dataset/ (không xoá, không ghi đè — trùng tên
    thì tự thêm hậu tố thời gian)
 4. Nếu có sheet KB_Articles(_Updated) → dựng đoạn nội dung (article_reference +
-   topic + legal_rule_summary_vi...), gắn so_ky_hieu=59/2020/QH14, import_source=
-   "dataset", nạp vào ChromaDB (có kiểm tra trùng lặp qua doc_id/so_ky_hieu/nội
-   dung y hệt, không nhân đôi khi import lại cùng file)
-5. Nếu có sheet Legal_Update_2025 → xử lý tương tự (đoạn nội dung riêng, cùng
-   so_ky_hieu), nạp vào ChromaDB
+   topic + legal_rule_summary_vi...), nạp vào ChromaDB (có kiểm tra trùng lặp qua
+   doc_id/so_ky_hieu/nội dung y hệt, không nhân đôi khi import lại cùng file)
+5. Nếu có sheet Legal_Update_2025 → xử lý tương tự (đoạn nội dung riêng), nạp vào
+   ChromaDB
+
+> **Cập nhật 2026-07-30 — cột `so_ky_hieu` tường minh (thay cho đoán từ `article_reference`):**
+> Trước đây `so_ky_hieu` bị gán cứng `59/2020/QH14` cho **toàn bộ** sheet
+> KB_Articles_Updated/Legal_Update_2025, bất kể dòng đó thực chất nói về văn bản
+> nào — phát hiện sống ngày 2026-07-30: 20 đoạn ghi rõ trong `article_reference`
+> là "Nghị định 168/2025/NĐ-CP"/"67/VBHN-VPQH"/"Luật 76/2025/QH15" nhưng vẫn bị
+> gắn `so_ky_hieu=59/2020/QH14`, khiến các văn bản đó thua điểm oan trong rerank
+> (dẫn tới nhiều câu trả lời trích dẫn sai văn bản, dù đúng nội dung). Đã vá theo
+> 2 lớp:
+> - **Cột `so_ky_hieu` mới** trong sheet mẫu (thay cho `source_url` cũ ở đúng vị
+>   trí đó — `source_url` vẫn còn, chỉ đổi vị trí cột) — điền tường minh mã văn
+>   bản (VD `59/2020/QH14`, `67/VBHN-VPQH`, `168/2025/NĐ-CP`) là cách chính xác
+>   nhất, được ưu tiên đọc trước nếu có.
+> - Nếu để trống, hệ thống **tự suy ra** từ chữ trong `article_reference`/
+>   `legal_source` (tìm cụm "168/2025", "67/VBHN-VPQH", "76/2025/QH15") — vẫn
+>   hoạt động đúng cho file cũ chưa có cột này, nhưng kém chắc chắn hơn điền tay.
+> - Cùng lúc sửa lỗi phân tích `article_number` cho các dòng gộp nhiều Điều
+>   (VD "Điều 112-115...") — trước đây rơi vào nhánh dự phòng lỗi, ghép luôn số
+>   Điều với số hiệu/năm thành chuỗi rác kiểu `"1121151682025"`; giờ lấy đúng số
+>   Điều đầu tiên (`"112"`).
+> - `nguon_thu_thap` (nhãn "Nguồn thu thập" hiển thị ở mục 11) đổi từ chuỗi tự
+>   ghép `"{so_ky_hieu} - {sheet_name} dataset"` sang **đúng tên file đã upload**
+>   — dễ truy ngược đoạn nào đến từ file nào hơn.
 6. Sheet Demo_*/Dataset_* KHÔNG được đọc nội dung từng dòng, KHÔNG bao giờ nạp
    vào ChromaDB — chỉ tồn tại trên đĩa để mục 9 (Đánh giá RAG) đọc trực tiếp
 7. Tự sinh Từ khóa phụ (mục 13.8) cho file từ cột retrieval_keywords của các
@@ -385,9 +413,12 @@ Ngay khi mở tab, hệ thống tự gọi `GET /latest_eval_result` và hiển 
 | Chế độ | Dữ liệu dùng | Cách chấm | Tốc độ |
 |---|---|---|---|
 | **⚡ Quick Evaluation** | **Toàn bộ** sheet `Demo_*` có trong file đã chọn, gộp lại và loại trùng theo cột `id` (VD file có cả `Demo_30` và `Demo_50` → gộp thành 50 câu duy nhất) | `auto` — so khớp từ khóa/trích dẫn (offline, không cần Groq) | Nhanh |
-| **🔬 Full Evaluation** | Gộp toàn bộ sheet `Dataset_*` có trong file đã chọn, loại trùng theo cột `id` (VD file có cả `Dataset_150` và `Dataset_200` → gộp thành 198 câu), sau đó **lấy mẫu ngẫu nhiên tối đa 80 câu** *(giảm từ 100 xuống 80 ngày 2026-07-28 — `FULL_EVAL_SAMPLE_SIZE` trong `engine/evaluate_engine.py` — để mỗi lượt chạy nhanh hơn và ít khả năng dính rate-limit Groq giữa chừng hơn)* từ tập đã gộp nếu tập đó lớn hơn 80 (mỗi lần chạy chọn ngẫu nhiên lại, không cố định) — mỗi câu tốn 1 lượt gọi Groq cho RAG + 1 lượt cho giám khảo | `llm` — chấm bằng Groq LLM theo rubric | Chậm hơn (~3s/câu do throttle Groq) |
+| **🔬 Full Evaluation** | Gộp **toàn bộ** sheet `Dataset_*` có trong file đã chọn, loại trùng theo cột `id` (VD file có cả `Dataset_150` và `Dataset_200` → gộp thành 198 câu) — chấm **hết**, không giới hạn số câu *(bỏ mức trần lấy-mẫu 80 câu ngày 2026-07-29, cùng lúc thêm xoay vòng nhiều Groq key — xem bên dưới — nên chạy hết dataset không còn bị Groq rate-limit chặn giữa chừng)* — mỗi câu tốn 1 lượt gọi Groq cho RAG + 1 lượt cho giám khảo | `llm` — chấm bằng Groq LLM theo rubric | Chậm nhất (~3s/câu do throttle Groq, cả dataset) |
+| **🎲 Kiểm tra ngẫu nhiên** | Gộp **cả** `Demo_*` lẫn `Dataset_*` trong file đã chọn, loại trùng theo `id`, rồi lấy mẫu ngẫu nhiên **50 câu** (`RANDOM_EVAL_SAMPLE_SIZE` trong `engine/evaluate_engine.py`) từ tập đã gộp — mỗi lần chạy chọn lại ngẫu nhiên | `llm` — chấm bằng Groq LLM theo rubric | Nhanh hơn Full (cố định 50 câu) |
 
-File `Dataset/example_sheet.xlsx` minh hoạ đúng quy ước đặt tên: sheet **`Demo_Quick_example`** (tiền tố `Demo_`) cho Quick Evaluation, sheet **`Dataset_example`** (tiền tố `Dataset_`) cho Full Evaluation. Đổi tên sheet sang tiền tố khác sẽ khiến sheet đó biến mất khỏi cả dropdown lẫn 2 nút đánh giá — `list_available_datasets()`/`run_evaluation()` trong `engine/evaluate_engine.py` chỉ quét đúng theo 2 tiền tố này.
+File `Dataset/example_sheet.xlsx` minh hoạ đúng quy ước đặt tên: sheet **`Demo_Quick_example`** (tiền tố `Demo_`) cho Quick Evaluation, sheet **`Dataset_example`** (tiền tố `Dataset_`) cho Full Evaluation. Đổi tên sheet sang tiền tố khác sẽ khiến sheet đó biến mất khỏi cả dropdown lẫn các nút đánh giá — `list_available_datasets()`/`run_evaluation()` trong `engine/evaluate_engine.py` chỉ quét đúng theo 2 tiền tố này.
+
+**Xoay vòng nhiều Groq key (2026-07-29):** `groqkey.txt` có thể chứa nhiều key, phân tách bằng `;` (VD `gsk_AAA;gsk_BBB;gsk_CCC`) — xem `engine/groq_keys.py`. Mọi lượt gọi Groq (sinh câu trả lời RAG lẫn giám khảo LLM) dùng chung một con trỏ xoay vòng: hễ gặp lỗi rate-limit (429) trên key hiện tại, hệ thống tự chuyển ngay sang key kế tiếp (không chờ) trước khi rơi vào lịch chờ lùi (backoff) như cũ. Chỉ khi mọi key đều bị giới hạn mới thực sự chờ.
 
 > **Cập nhật 2026-07-26:** `example_sheet.xlsx` từng thiếu nhiều cột so với `enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx` thật (8/14 cột ở sheet `Dataset_example`/`Demo_Quick_example`, sai hẳn cấu trúc ở `Legal_Update_2025`) — quan trọng nhất là thiếu cả cột `retrieval_keywords`, khiến ai dùng file mẫu để tạo dataset mới sẽ vô tình lặp lại lỗi thiếu keywords (xem mục 13.7). Đã cập nhật khớp 100% cột với file dataset thật ở cả 4 sheet.
 
@@ -480,34 +511,42 @@ Nhấn **"Xoá"** ở dòng tương ứng → xác nhận → hệ thống xoá 
 
 > **Cập nhật 2026-07-25:** Cả 3 bảng (Văn bản pháp luật/Dataset/Tình huống) có thêm cột **"Người nhập"** — lấy từ `request.session["user_name"]` tại thời điểm import (fallback `admin1` nếu thiếu). Dữ liệu import từ trước ngày này không có tên người nhập chính xác.
 
-### Bước 3: Nút "Xem Thông Tin" — Sửa Từ Khóa Của Một Văn Bản (mới, 2026-07-28)
+### Bước 3: Nút "Xem Thông Tin" — Sửa Từ Khóa Của Một Văn Bản (cập nhật lớn 2026-07-29/30)
 
-Chỉ có ở tab **Văn bản pháp luật**, cho cả Teacher và Admin:
+Chỉ có ở tab **Văn bản pháp luật**, cho cả Teacher và Admin. Modal hiện có **3 khối** riêng biệt:
 
 1. Nhấn **"Xem thông tin"** ở dòng văn bản muốn sửa — mở modal hiển thị: Số ký hiệu, Loại văn bản, Nguồn thu thập, Đoạn trong database, Người nhập (**không** hiện nội dung đoạn văn bản)
-2. Bên dưới là 2 khối **Từ khóa chính** (bắt buộc ≥1) và **Từ khóa phụ** (tuỳ chọn) — mỗi khối có:
-   - Các từ khóa đã gắn hiển thị dạng "chip" bo tròn, có dấu ✕ để xoá
-   - Ô tìm kiếm + select để thêm từ khóa mới (chọn xong tự thêm thành chip, tự xoá khỏi danh sách select để không chọn trùng)
-3. Sửa xong nhấn **"Nộp"** — hệ thống validate lại (không cho lưu nếu Từ khóa chính rỗng, cả phía giao diện lẫn phía server) rồi lưu qua `POST /update_source_keywords`
-4. Đóng modal, mở lại vẫn còn nút Xoá bên cạnh (chỉ Admin) — bấm Xoá dùng đúng luồng ở Bước 2, không đi qua modal này
+2. **"Tăng ưu tiên theo Điều"** *(gộp 2026-07-29 từ 2 mục cũ "Chấm điểm nguồn theo Điều" + "Tăng ưu tiên theo Điều")* — áp dụng cho **đúng 1 Điều cụ thể** trong văn bản, không ảnh hưởng Điều khác cùng văn bản:
+   - Phía trên hiện sẵn danh sách **chip các Điều đã có tag** (VD "Điều 77 · 2 từ khóa") — bấm vào chip tự điền số Điều + tải tag, không cần đoán số Điều để tra (2026-07-29, sửa vụ tag ẩn của ELU177/178 — tag tồn tại thật nhưng giao diện cũ không hiện ra)
+   - Ô nhập số Điều **chỉ chấp nhận số Điều có thật trong văn bản này** (2026-07-30, có gợi ý autocomplete, từ chối nếu gõ số không tồn tại) — bấm "Tải từ khóa Điều này" để tải/tạo mới
+   - Chọn từ khóa từ kho **"Chấm điểm nguồn"** — mỗi từ khóa khớp câu hỏi cộng **+15 điểm, cộng dồn** nếu khớp nhiều từ khóa (2026-07-29: trước đây có 2 tầng +8/+15 tách rời, nay gộp một mức +15 duy nhất cho mọi tag cấp Điều bất kể gắn qua mục nào)
+3. **"Từ khóa tăng ưu tiên (priority)"** — áp dụng cho **cả văn bản** (mọi Điều), dùng khi cả văn bản cần ưu tiên hơn văn bản khác (VD văn bản hợp nhất hiện hành nên thắng luật gốc) — cùng cơ chế +15/cộng dồn như trên nhưng phạm vi rộng hơn (cả văn bản thay vì 1 Điều)
+4. Sửa xong nhấn **"Nộp"** — **không còn** yêu cầu bắt buộc ≥1 từ khóa (2026-07-29, khác với hình 2026-07-28 cũ) — để trống là hợp lệ nếu văn bản này chưa cần phân biệt
+5. Đóng modal, mở lại vẫn còn nút Xoá bên cạnh (chỉ Admin) — bấm Xoá dùng đúng luồng ở Bước 2, không đi qua modal này
 
-> Một từ khóa đã bị Admin **tắt** (mục Bước 4) vẫn hiển thị đúng nếu đã gắn cho văn bản này từ trước (vẫn tính điểm bình thường) — chỉ là không xuất hiện trong ô select để **gắn thêm mới**.
+> **Cơ chế "giảm ưu tiên" (penalty) đã bị xoá hoàn toàn (2026-07-29).** Từng thử: phạt điểm cả văn bản để 59/2020/QH14 thua 168/2025/NĐ-CP — nhưng cùng 1 Điều (Điều 26) vừa cần bị phạt (đúng cho câu này) vừa cần không bị phạt (đúng cho câu khác), không có giá trị phạt nào thoả cả hai vì phạt cấp văn bản không phân biệt được giữa các Điều cùng văn bản. Thay bằng tăng ưu tiên trực tiếp cho đúng Điều (mục 2 ở trên) — không đụng điểm của nguồn cạnh tranh nên không tái tạo xung đột này.
 
-### Bước 4: Tab "Từ Khóa" — Quản Lý Danh Sách Từ Khóa (mới, 2026-07-28, chỉ Admin)
+> Một từ khóa đã bị Admin **tắt** (Bước 4) vẫn hiển thị đúng nếu đã gắn cho văn bản này từ trước (vẫn tính điểm bình thường) — chỉ là không xuất hiện trong ô select để **gắn thêm mới**.
 
-Bảng `keyword` trong `chat.db` dùng chung cho **2 mục đích khác nhau**, phân biệt bằng cột `status` (xem mục 13.8/13.9):
+### Bước 4: Tab "Từ Khóa" — Quản Lý Danh Sách Từ Khóa (2026-07-28, cập nhật 2026-07-29, chỉ Admin)
+
+Bảng `keyword` trong `chat.db` dùng chung cho **3 mục đích khác nhau**, phân biệt bằng cột `status` (xem mục 13.8/13.9):
 
 | Loại | status | Dùng để |
 |---|---|---|
-| **Chấm điểm nguồn** | `0`=đang dùng, `1`=đã tắt | Gắn cho Văn bản pháp luật (Bước 3, mục 6) để cộng điểm ưu tiên khi trả lời |
+| **Chấm điểm nguồn** | `0`=đang dùng, `1`=đã tắt | Gắn theo Điều cụ thể (Bước 3) — cấp cho một Điều duy nhất |
 | **Chặn ngoài phạm vi** | `2`=đang dùng, `3`=đã tắt | Câu hỏi chứa từ khóa loại này (VD "ly hôn", "hình sự") bị từ chối trả lời ngay từ đầu, trước khi truy xuất |
+| **Tăng ưu tiên** | `8`=đang dùng, `9`=đã tắt | Gắn cho cả văn bản HOẶC 1 Điều cụ thể (Bước 3) — cộng +15 điểm/khớp, cộng dồn |
+
+> `status` 4–7 (từng là "Giảm ưu tiên" nặng/nhẹ) **đã bị khai tử vĩnh viễn** cùng lúc xoá cơ chế penalty — cố tình không tái sử dụng dải số này, để dữ liệu cũ nào lỡ còn tham chiếu sẽ báo lỗi rõ ràng thay vì âm thầm đổi nghĩa.
 
 Thao tác trong tab:
-1. Form phía trên: ô nhập tên + select chọn loại (**Chấm điểm nguồn** / **Chặn ngoài phạm vi**) → nhấn **"＋ Thêm từ khóa"**. Tên từ khóa **không được trùng** giữa 2 loại (1 tên chỉ thuộc 1 loại tại một thời điểm)
+1. Form phía trên: ô nhập tên + select chọn loại (**Chấm điểm nguồn** / **Chặn ngoài phạm vi** / **Tăng ưu tiên**) → nhấn **"＋ Thêm từ khóa"**. Tên từ khóa **không được trùng** giữa các loại (1 tên chỉ thuộc 1 loại tại một thời điểm)
 2. Ô **"🔍 Tìm từ khóa theo tên"** lọc trực tiếp bảng bên dưới (không gọi lại server)
 3. Bảng hiển thị **10 dòng/trang**, có nút Trước/Sau ở chân bảng để chuyển trang
-4. Cột "Loại" hiện badge màu (xanh ngọc = Chấm điểm nguồn, vàng = Chặn ngoài phạm vi), cột "Trạng thái" hiện Đang dùng/Đã tắt, nút bật/tắt tự nhận đúng cặp trạng thái theo loại (không lẫn 0/1 với 2/3)
-5. **Không có nút xoá từ khóa** — chỉ tắt (status lẻ). Từ khóa đã tắt vẫn giữ nguyên hiệu lực với văn bản đã gắn từ trước, chỉ ẩn khỏi các ô chọn mới (Bước 3, mục 6) để tránh việc tắt một từ khóa làm sập điểm số các văn bản đang dùng nó
+4. Cột "Loại" hiện badge màu, cột "Trạng thái" hiện Đang dùng/Đã tắt, nút bật/tắt và "Đổi loại" tự nhận đúng cặp trạng thái theo loại
+5. **Không có nút xoá từ khóa** qua giao diện — chỉ tắt (status lẻ). Từ khóa hoàn toàn chưa gắn cho nguồn nào (mồ côi) có thể xoá thẳng qua DB nếu cần dọn dẹp (đã làm 1 lần 2026-07-30, xoá 24 từ khóa "Chấm điểm nguồn" chưa từng dùng — xác nhận không ảnh hưởng gì qua bộ kiểm thử hồi quy trước khi xoá)
+6. Bảng "Văn bản pháp luật" có sidebar giải thích riêng (2026-07-29) mô tả từng loại từ khóa — panel bên phải tab, không cần đọc code để hiểu ý nghĩa từng loại
 
 ### Bước 5: Tab Kiểm Thử Hồi Quy (2026-07-25, chỉ Admin)
 
@@ -672,11 +711,15 @@ rag-legal-assistant-master/
 | `/list_scenario_sources` | GET | Danh sách bộ tình huống đã import (nhóm theo tên file) | Admin |
 | `/delete_scenario_source` | POST | Xoá một bộ tình huống theo tên file | Admin |
 | `/get_source_info` *(mới 2026-07-28)* | GET | Thông tin cơ bản + từ khóa của 1 văn bản (`?source_type=law&source_key=...`) — chỉ hỗ trợ `source_type=law` | Teacher, Admin |
-| `/update_source_keywords` *(mới 2026-07-28)* | POST | Cập nhật Từ khóa chính/phụ của 1 văn bản pháp luật | Teacher, Admin |
-| `/list_active_keywords` *(mới 2026-07-28)* | GET | Danh sách từ khóa "Chấm điểm nguồn" đang bật (status=0) — dùng cho ô chọn khi import/sửa | Teacher, Admin |
-| `/list_keywords` *(mới 2026-07-28)* | GET | Toàn bộ từ khóa (cả 2 loại, cả bật lẫn tắt) — dùng cho tab Từ khóa | Teacher, Admin |
-| `/add_keyword` *(mới 2026-07-28)* | POST | Thêm từ khóa mới (`name`, `is_out_of_scope`) | Admin |
-| `/toggle_keyword_status` *(mới 2026-07-28)* | POST | Bật/tắt 1 từ khóa (`id`, `status` — nhận 0/1/2/3) | Admin |
+| `/update_source_keywords` *(mới 2026-07-28, mở rộng 2026-07-29)* | POST | Cập nhật từ khóa của 1 văn bản/1 Điều — nay chấp nhận `source_type="law_article"` (thêm 2026-07-29) | Teacher, Admin |
+| `/get_article_keywords` *(mới 2026-07-29)* | GET | Từ khóa (mọi kind) đã gắn cho 1 Điều cụ thể (`?source_key=...&article_number=...`) | Teacher, Admin |
+| `/list_tagged_articles` *(mới 2026-07-29)* | GET | Danh sách mọi Điều của 1 văn bản đã có ít nhất 1 tag — hiện dạng chip trong modal | Teacher, Admin |
+| `/list_source_articles` *(mới 2026-07-30)* | GET | Danh sách **mọi** số Điều có thật trong 1 văn bản (không cần đã gắn tag) — dùng để giới hạn ô nhập số Điều | Teacher, Admin |
+| `/list_active_keywords` *(mới 2026-07-28)* | GET | Danh sách từ khóa "Chấm điểm nguồn" đang bật (status=0) — dùng cho ô chọn cấp Điều | Teacher, Admin |
+| `/list_active_priority_keywords` *(mới 2026-07-29)* | GET | Danh sách từ khóa "Tăng ưu tiên" đang bật (status=8) — dùng cho ô chọn cấp văn bản/Điều | Teacher, Admin |
+| `/list_keywords` *(mới 2026-07-28)* | GET | Toàn bộ từ khóa (mọi loại, cả bật lẫn tắt) — dùng cho tab Từ khóa | Teacher, Admin |
+| `/add_keyword` *(mới 2026-07-28, mở rộng 2026-07-29)* | POST | Thêm từ khóa mới (`name`, `kind` — nhận `scoring`/`oos`/`priority`) | Admin |
+| `/toggle_keyword_status` *(mới 2026-07-28, mở rộng 2026-07-29)* | POST | Bật/tắt hoặc đổi loại 1 từ khóa (`id`, `status` — nhận 0/1/2/3/8/9, **không** nhận 4-7 đã khai tử) | Admin |
 
 ### 13.3 Phân Loại Câu Hỏi RAG
 
@@ -743,16 +786,25 @@ Loạt sửa lỗi sau khi rà soát kỹ file `25-7 nhan xet.docx` và đo Quic
 
 ---
 
-### 13.8 Cơ Chế Từ Khóa Chấm Điểm Nguồn (Keyword-Based Source Scoring, thêm 2026-07-28)
+### 13.8 Cơ Chế Từ Khóa Chấm Điểm Nguồn & Tăng Ưu Tiên (thêm 2026-07-28, đại tu 2026-07-29/30)
 
 **Vấn đề trước đây:** `_score_doc()` chỉ boost điểm cho những nguồn khớp điều kiện **viết cứng trong code** (VD `_ESTABLISHMENT_DOC_TYPES`, hoặc check thẳng chuỗi `"168/2025"` cho câu hỏi hộ kinh doanh — xem mục 13.7). Văn bản luật mới import qua mục 6 không khớp bất kỳ điều kiện cứng nào, nên **không bao giờ** được các boost đặc thù này, dù nội dung thực sự liên quan.
 
-**Giải pháp:** admin/giáo viên tự gắn **Từ khóa chính/phụ** cho từng văn bản (mục 6 lúc import, hoặc mục 11 Bước 3 sửa sau) — không cần sửa code mỗi khi có văn bản mới:
+**Giải pháp ban đầu (2026-07-28):** admin/giáo viên tự gắn Từ khóa chính/phụ cho từng văn bản, +8/+4 điểm khi khớp. **Sau đó phát hiện (2026-07-29): article-level không đủ mạnh để phân biệt 2 Điều cùng văn bản đang cạnh tranh nhau** (VD Điều 26 của 59/2020/QH14 chung chung thắng điểm Điều 76/77 của 168/2025/NĐ-CP dù sai) — dẫn tới toàn bộ đợt redesign sau:
 
-- **Chấm điểm (rerank):** nếu câu hỏi khớp Từ khóa chính của nguồn đang xét → **+8 điểm**; khớp Từ khóa phụ → **+4 điểm**. Giá trị cố ý để nhỏ (ban đầu thử +25/+10 giống các boost cứng khác, nhưng test thật phát hiện: một nguồn vừa có đoạn luật gốc vừa có đoạn dataset đã curate riêng cho đúng câu hỏi đó, +25 áp đều cho mọi đoạn của nguồn đủ để đoạn luật gốc chung chung thắng điểm đoạn dataset curate chính xác hơn — xem `_score_doc()` trong `rag_engine.py` để rõ chi tiết phép đo).
-- **Truy xuất (retrieval augmentation):** ngoài chấm điểm, nếu câu hỏi khớp từ khóa của 1 nguồn, hệ thống còn **chủ động kéo thêm top-5 đoạn phù hợp nhất** của nguồn đó vào danh sách ứng viên — tránh trường hợp semantic/keyword search thường không tìm ra nguồn mới (chưa có `retrieval_keywords` curate sẵn) nên chấm điểm dù có boost cũng không có cơ hội phát huy. Chỉ kéo top-5, **không kéo cả nguồn**, vì một nguồn được gắn có thể có hàng trăm đoạn (VD Luật Doanh nghiệp 2020 có 310 đoạn) — kéo hết sẽ làm loãng candidate pool.
-- Cơ chế **cộng thêm hoàn toàn** (additive) — nguồn chưa được gắn từ khóa nào hoạt động y hệt trước đây, không có gì thay đổi. Xác nhận qua `evaluate/retrieval_regression_tests.py` (4/4 pass) và so sánh trực tiếp trích dẫn 10 câu mẫu trước/sau khi thêm — giống hệt.
-- Chỉ **Văn bản pháp luật** mới có Từ khóa chính (buff cao) vì đây là nguồn chính thức quan trọng nhất; **Tình huống** và phần **KB_Articles*/Legal_Update_2025 của Dataset** chỉ tự sinh Từ khóa phụ (buff thấp) vì là dữ liệu làm giàu ngữ cảnh, không phải nguồn thẩm quyền (xem mục 7, mục 8). Sheet `Demo_*`/`Dataset_*` của Dataset không tham gia cơ chế này vì không nạp vào ChromaDB — không có gì để gắn từ khóa/chấm điểm (xem mục 8 và mục 14 "Bộ Câu Hỏi Full Evaluation Từng Bị Lẫn Vào ChromaDB").
+- **`source_type="law_article"`** — tag không chỉ theo văn bản (`so_ky_hieu`) mà theo **`"{so_ky_hieu}#{article_number}"`**, cho phép chấm điểm phân biệt từng Điều riêng lẻ trong cùng 1 văn bản — đây là mảnh còn thiếu khiến cơ chế 2026-07-28 không đủ mạnh.
+- **Cơ chế "priority"** (thêm 2026-07-29): mỗi từ khóa priority khớp câu hỏi cộng **+15 điểm, cộng dồn** (không giới hạn 1 lần) — mạnh hơn nhiều +8/+4 cũ, áp dụng được ở **cả 2 cấp**: cả văn bản (document-level, mục 11 Bước 3 khối 3) hoặc đúng 1 Điều (article-level, khối 2).
+- **Gộp lại (2026-07-29):** "Chấm điểm nguồn theo Điều" (+8, không cộng dồn) và "Tăng ưu tiên theo Điều" (+15, cộng dồn) từng là 2 mục UI/2 cơ chế tách rời — nay gộp thành **một mức +15/cộng dồn duy nhất** ở cấp Điều, chọn từ kho "Chấm điểm nguồn" nhưng tính điểm theo công thức priority. Tag cũ gắn trước khi gộp (dù dưới kind nào: primary/secondary/priority) vẫn tính điểm y hệt — `_score_doc()` không còn phân biệt kind ở cấp Điều.
+- **Cơ chế "penalty" (giảm ưu tiên) — thử rồi xoá hoàn toàn (2026-07-29):** ý tưởng là phạt điểm cả văn bản để 59/2020/QH14 luôn thua 168/2025/NĐ-CP — nhưng Điều 26 của 59/2020/QH14 vừa cần bị phạt (đúng cho ELU177/178) vừa cần **không** bị phạt (đúng cho ELS066/ELU170/ELU169 — cùng Điều, câu hỏi khác) — không giá trị phạt cấp văn bản nào thoả cả hai, vì phạt/thưởng cấp văn bản không phân biệt được các Điều cùng văn bản. Ưu tiên trực tiếp cho đúng Điều (không đụng điểm nguồn cạnh tranh) giải quyết đúng gốc rễ mà không tái tạo xung đột này.
+- **Bug tìm thấy 2026-07-30 — `_source_keyword_candidates()` không hề nhận diện tag priority:** hàm augmentation (kéo thêm ứng viên vào candidate pool khi câu hỏi khớp từ khóa của 1 nguồn — mô tả gốc bên dưới) chỉ kiểm tra bucket primary/secondary, chưa từng kiểm tra priority — nghĩa là **toàn bộ** tag priority (cả cấp văn bản lẫn cấp Điều, xây suốt 2026-07-29) chưa bao giờ được đảm bảo lọt vào candidate pool, chỉ tình cờ vào được nhờ keyword_recall/semantic search xếp hạng đủ cao. Đã vá: kiểm tra cả 3 bucket, và nhận diện thêm key `law_article` (trước đây hàm chỉ dựng key `law`/`dataset`/`scenario`, chưa từng dựng `law_article`).
+- **Chấm điểm (rerank):** khớp Từ khóa chính (cấp Điều, xem trên) → **+15 điểm/khớp, cộng dồn**. Trước đây thử +8/+4 rồi +65/+20 (2 tầng nặng/nhẹ), test thật cho thấy chưa đủ khoảng cách với các nguồn cạnh tranh mạnh — cuối cùng chốt **1 mức +15 duy nhất, cộng dồn theo số từ khóa khớp** (nhiều từ khóa đặc thù hơn > 1 số lớn duy nhất, dễ kiểm chứng bằng test thật hơn là đoán số).
+- **Truy xuất (retrieval augmentation):** ngoài chấm điểm, nếu câu hỏi khớp từ khóa của 1 nguồn (văn bản hoặc Điều), hệ thống còn **chủ động kéo thêm top-5 đoạn phù hợp nhất** của nguồn đó vào danh sách ứng viên. Chỉ kéo top-5, **không kéo cả nguồn**, vì một nguồn được gắn có thể có hàng trăm đoạn — kéo hết sẽ làm loãng candidate pool.
+- Cơ chế **cộng thêm hoàn toàn** (additive) — nguồn chưa được gắn từ khóa nào hoạt động y hệt trước đây, không có gì thay đổi. Xác nhận qua `evaluate/retrieval_regression_tests.py` (4/4 pass) mỗi lần sửa.
+- Chỉ **Văn bản pháp luật** mới gắn được cả 2 cấp (văn bản + Điều); **Tình huống** và phần **KB_Articles*/Legal_Update_2025 của Dataset** chỉ tự sinh Từ khóa phụ vì là dữ liệu làm giàu ngữ cảnh, không phải nguồn thẩm quyền (xem mục 7, mục 8).
+
+> **`_keyword_recall()` top_n mở rộng 5→12 (2026-07-30):** một cụm nhiều Điều cùng chủ đề (VD Điều 74–87 của 59/2020/QH14 đều về "công ty TNHH một thành viên") có thể hoà điểm keyword-overlap thô, và top-5 quá hẹp để cả cụm cùng vào candidate pool cho `_score_doc()` phân xử tiếp — mở rộng lên 12 chỉ **thêm** ứng viên được xét, không đổi điểm số bất kỳ đoạn nào đang đúng, nên an toàn tuyệt đối (đã kiểm chứng qua bộ test thật + hồi quy).
+>
+> **Boost "định nghĩa cấp Điều" (`_DEFINITION_DOC_TYPES`, 2026-07-30):** với câu hỏi loại "định nghĩa" HOẶC "tình huống" (VD "2 người cùng góp 50%, có còn là công ty TNHH một thành viên không?" — không hỏi thẳng "là gì" nhưng vẫn cần Điều định nghĩa gốc thắng các Điều anh em về quyền/nghĩa vụ/vốn), Điều nào có `doc_type` thuộc nhóm "Điều định nghĩa gốc của loại hình doanh nghiệp" (đã kiểm tra nội dung từng `doc_type` thật, không đoán theo tên) được cộng thêm **+12 điểm**.
 
 ### 13.9 Danh Sách Chặn Ngoài Phạm Vi Chuyển Vào Database (thêm 2026-07-28)
 
@@ -917,6 +969,20 @@ DEVICE=cuda
 - `ELS053`/`ELU200` (2 câu bị ảnh hưởng ở đợt vá 1) test lại qua `ask_rag()`: cả 2 phục hồi đúng — `ELS053` trích đúng Điều 207 (giải thể khi đang tranh chấp toà án/trọng tài), `ELU200` từ chối đúng cách hướng dẫn né tránh kê khai chủ sở hữu hưởng lợi, trích đúng Nghị định 168/2025/NĐ-CP
 - `evaluate/retrieval_regression_tests.py`: vẫn **4/4 pass**
 - Quick/Full Evaluation (mục 9) không đổi hành vi — luôn đọc trực tiếp từ file `.xlsx` trên đĩa, không phụ thuộc ChromaDB
+
+### Đại Tu Cơ Chế Ưu Tiên Nguồn + Vá Lỗi Chất Lượng Dữ Liệu (2026-07-29/30)
+
+**Bối cảnh:** mục tiêu là làm RAG ưu tiên đúng `67/VBHN-VPQH` (luật hiện hành) và `168/2025/NĐ-CP` (nghị định đăng ký mới) hơn `59/2020/QH14` (luật gốc đã bị thay thế), mà **không** phá các câu vẫn cần trích đúng `59/2020/QH14`. Toàn bộ đợt việc tóm tắt ở mục 13.8 (đọc mục đó trước để hiểu cơ chế priority/article-level), thêm các phát hiện lỗi dữ liệu thật:
+
+- **`so_ky_hieu` bị gán sai cho 20 đoạn** trong `KB_Articles_Updated`/`Legal_Update_2025` — nội dung đoạn tự ghi rõ là "Nghị định 168/2025/NĐ-CP"/"67/VBHN-VPQH"/"Luật 76/2025/QH15" nhưng bị import gán cứng `so_ky_hieu=59/2020/QH14` cho cả sheet (xem chi tiết mục 8). Đã vá cả dữ liệu đang chạy (update thẳng metadata trong ChromaDB) lẫn code import (mục 8) để không tái diễn.
+- **`article_number` bị hỏng** cho các dòng gộp nhiều Điều (VD "Điều 112-115...") — parser cũ chỉ đọc key số ít `article=`, bỏ sót key số nhiều `articles=` mà các dòng gộp dùng, rơi vào nhánh dự phòng ghép mọi chữ số trong `article_reference` thành 1 chuỗi rác (VD `"1121151682025"`). Đã vá cả dữ liệu lẫn code.
+- **`entity_type` gán sai** cho 1 đoạn luật (Điều 18 Nghị định 168/2025/NĐ-CP) — nội dung thực ra áp dụng cho **mọi** loại hình doanh nghiệp (cổ đông JSC, thành viên công ty hợp danh/TNHH, chủ sở hữu TNHH một thành viên đều liệt kê chung 1 Điều) nhưng bị gắn cứng `entity_type="llc_multi_member"`, khiến bộ lọc loại hình (`filter_compatible_docs()`, mục 13.6) âm thầm loại bỏ đoạn này khỏi mọi câu hỏi không phải TNHH nhiều thành viên. Đã thêm vào nhóm entity-agnostic (`_ENTITY_AGNOSTIC_DOC_TYPES`).
+- **`evaluate/retrieval_regression_tests.py`** (bộ 4 câu, mục 11 Bước 5) chạy **sau mỗi thay đổi** trong suốt đợt việc này — luôn giữ 4/4 pass; đồng thời dùng thêm 1 bộ 13 câu thật lấy từ file kết quả Full Evaluation gần nhất (không tốn quota Groq, chỉ so khớp văn bản/Điều được chọn) để đo tiến độ: từ 5/13 đúng lúc bắt đầu lên **13/13 đúng** sau khi xong.
+
+**Kết luận thực tế cho việc dùng hệ thống tiếp theo:**
+- Không cần chạy lại import dataset — ChromaDB đang chạy đã được vá trực tiếp, tương đương với việc import lại file đã sửa.
+- Nếu import lại từ đầu (máy khác, hoặc xoá dữ liệu cũ), dùng đúng file `enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx` hiện tại (chưa cần thêm cột `so_ky_hieu` tường minh — code tự suy luận đúng từ `article_reference`/`legal_source` có sẵn, xem mục 8) là đủ, đã kiểm chứng bằng cách chạy thử hàm import (không phải "chạy thật") trên đúng file này trước khi khẳng định.
+- Vì thay đổi này tác động trực tiếp tới `ask_rag()` (dùng chung `retrieve_docs`/`select_best_doc`/`_score_doc`), **kết quả Đánh giá RAG (mục 9) chạy lại từ nay sẽ khác** — các câu từng trích dẫn sai văn bản/Điều nêu trên nhiều khả năng đã đúng hơn.
 
 ---
 

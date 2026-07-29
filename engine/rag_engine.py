@@ -72,8 +72,7 @@ DEFINITION_PATTERNS = [
     "quy định về",
 ]
 
-with open(os.path.join(BASE_DIR, "groqkey.txt"), "r") as f:
-    GROQ_API_KEY = f.read().strip()
+from engine.groq_keys import current_key, rotate_key, get_keys, is_rate_limit_error
 
 # =========================
 # EMBEDDING + VECTORSTORE
@@ -94,9 +93,11 @@ retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 # =========================
 # LLM
 # =========================
+LLM_MODEL = "llama-3.1-8b-instant"
+
 llm = ChatGroq(
-    api_key=GROQ_API_KEY,
-    model="llama-3.1-8b-instant",
+    api_key=current_key(),
+    model=LLM_MODEL,
     temperature=0
 )
 
@@ -243,6 +244,31 @@ def get_law_source_info(so_ky_hieu: str) -> dict:
         "chunk_count": len(metas),
         "importer": first.get("importer") or DEFAULT_IMPORTER,
     }
+
+
+def get_law_source_articles(so_ky_hieu: str) -> list:
+    """Every distinct article_number that actually exists in ChromaDB for one
+    law source, sorted numerically where it parses as an int (non-numeric
+    suffixes like "20a" last, alphabetically) — used to constrain the "Tăng
+    ưu tiên theo Điều" Điều-number input to real values instead of any
+    arbitrary number (2026-07-29 UX request)."""
+    so_ky_hieu = (so_ky_hieu or "").strip()
+    if not so_ky_hieu:
+        return []
+    try:
+        data = vectorstore.get(where={"so_ky_hieu": so_ky_hieu}, include=["metadatas"])
+    except Exception:
+        return []
+    articles = {
+        str(m.get("article_number") or m.get("article"))
+        for m in (data.get("metadatas") or [])
+        if m.get("article_number") or m.get("article")
+    }
+
+    def sort_key(article):
+        return (0, int(article)) if article.isdigit() else (1, article)
+
+    return sorted(articles, key=sort_key)
 
 
 def delete_source(so_ky_hieu: str) -> int:
@@ -607,6 +633,27 @@ _INTENT_SCENARIO_PHRASES = [
     # yes/no-phrased questions in the corpus to scenario intent.
     "được không", "phải không", "đúng không", "có đúng không", "hay không",
     "được chưa", "rồi chưa",
+    # "X cần xử lý thế nào?" / "...giải quyết ra sao?" surface-match the same
+    # open wh-ending as a genuine procedure question ("Thành lập ... như thế
+    # nào?"), so bare ending-shape alone can't tell them apart — but "xử lý"/
+    # "giải quyết" (handle/resolve A PROBLEM) only ever appears in this
+    # corpus on scenario_case rows about one specific party's specific
+    # violation (ELS016, ELS028, ELU164 — verified against the full 200-row
+    # dataset, 2026-07-29), never on a genuine "how do I register" question.
+    # Without this, "thành lập" elsewhere in the same sentence (scene-setting
+    # for the scenario, e.g. "...khi thành lập công ty cổ phần nhưng không
+    # thanh toán đủ...") won hard as "procedure" intent, which pulls in every
+    # _ESTABLISHMENT_DOC_TYPES doc via retrieve_docs' procedure-intent
+    # augmentation and outranks the actually-correct article via _score_doc's
+    # +25 procedure boost (ELS028 cited Điều 22 "Hồ sơ đăng ký" instead of the
+    # correct Điều 113 "Thanh toán cổ phần..." this way — 2026-07-29 review).
+    "xử lý thế nào", "xử lý ra sao", "giải quyết thế nào", "giải quyết ra sao",
+    # "Còn lại có đủ điều kiện ... không?" — an eligibility/headcount check on
+    # a specific hypothetical, not a "what are the conditions" definition
+    # question (those instead end "là gì?", already caught by
+    # _INTENT_DEFINITION_PHRASES). Also verified 100% scenario_case in the
+    # full dataset (ELS026, ELS036).
+    "có đủ điều kiện",
 ]
 
 
@@ -646,6 +693,12 @@ def detect_query_constraints(question: str) -> dict:
 _ENTITY_AGNOSTIC_DOC_TYPES = {
     "establishment_eligibility", "civil_capacity_condition",
     "household_business_eligibility_condition",
+    # Beneficial-owner declaration criteria apply across every entity type in
+    # the same article (JSC shareholders, LLC/partnership members, single-
+    # member LLC owners all listed side by side) — a law-import chunk here
+    # had an incorrectly auto-tagged entity_type="llc_multi_member" that
+    # wrongly excluded it from JSC questions like ELU161 (2026-07-30 fix).
+    "beneficial_owner_declaration",
 }
 
 
@@ -690,20 +743,34 @@ def filter_compatible_docs(question: str, docs: list) -> list:
 # QUERY REWRITE
 # =========================
 def _llm_invoke_with_retry(prompt: str, retries: int = 3) -> str:
-    """Invoke LLM with retry on rate-limit/timeout errors."""
+    """Invoke LLM with retry on rate-limit/timeout errors.
+
+    On a rate-limit error, rotates to the next Groq API key (see
+    groqkey.txt / groq_keys.py) before falling back to a timed backoff — a
+    429 on one key says nothing about whether a sibling key is also
+    limited, so trying the next key costs no wall-clock time and is
+    strictly better than sleeping out the same key's window."""
     import time
-    for attempt in range(retries + 1):
+    global llm
+    rotations_left = max(len(get_keys()) - 1, 0)
+    attempt = 0
+    while True:
         try:
             return llm.invoke(prompt).content.strip()
         except Exception as e:
+            if is_rate_limit_error(e) and rotations_left > 0:
+                rotations_left -= 1
+                llm = ChatGroq(api_key=rotate_key(), model=LLM_MODEL, temperature=0)
+                print(f"  ⚠ Groq rate limit — rotating API key ({rotations_left} left)")
+                continue
             err = str(e).lower()
             if attempt < retries and any(k in err for k in ["rate", "timeout", "429", "503", "connection"]):
                 wait = 5 * (attempt + 1)  # 5s, 10s, 15s
-                print(f"  ⚠ LLM retry {attempt + 1}/{retries} after {wait}s ({err[:40]})")
+                attempt += 1
+                print(f"  ⚠ LLM retry {attempt}/{retries} after {wait}s ({err[:40]})")
                 time.sleep(wait)
                 continue
             raise
-    return ""
 
 
 def rewrite_query(question: str) -> str:
@@ -767,7 +834,7 @@ def extract_article_number_from_question(question: str) -> str | None:
 # word doesn't drag in an unrelated article — this is a recall booster for
 # the semantic search, not a replacement for select_best_doc()'s reranking.
 # =========================
-def _keyword_recall(question: str, all_docs: list, top_n: int = 5, min_score: int = 4) -> list:
+def _keyword_recall(question: str, all_docs: list, top_n: int = 12, min_score: int = 4) -> list:
     q_words = {w for w in tokenize(question) if w not in STOPWORDS}
     if not q_words:
         return []
@@ -818,11 +885,25 @@ def _source_keyword_candidates(question: str, all_docs: list, source_keywords_ma
 
     # Which (source_type, source_key) pairs does this question's text
     # actually match? Check this first so we don't bother scoring the whole
-    # corpus when no tag applies.
+    # corpus when no tag applies. Checks all three kind buckets (2026-07-30
+    # fix) — this used to check only primary|secondary, which meant it never
+    # fired for ANY priority tag: document-level "law" sources retired their
+    # primary/secondary buckets entirely in favor of priority-only back on
+    # 2026-07-29, and every article-level ("law_article") tag added since
+    # then was saved under priority kind too (see _score_doc's merged
+    # article-scoring comment) — so this whole augmentation channel had been
+    # silently inert for the entire priority mechanism, article-level tags
+    # included, ever since. Article-level tags in particular had NO
+    # dedicated recall-boosting path at all (the loop below only ever built
+    # "law"/"dataset"/"scenario" keys via _source_type_key(), never
+    # "law_article"), so a tagged Điều only ever entered the candidate pool
+    # by luck via keyword_recall/semantic search ranking — found live
+    # 2026-07-30 while diagnosing ELS020/ELU158, both genuine recall gaps
+    # despite having matching article-level tags.
     matched_keys = set()
     for source_type, by_key in source_keywords_map.items():
         for source_key, kw_map in by_key.items():
-            names = kw_map["primary"] | kw_map["secondary"]
+            names = kw_map["primary"] | kw_map["secondary"] | kw_map["priority"]
             if any(_phrase_in(name, question) for name in names):
                 matched_keys.add((source_type, source_key))
     if not matched_keys:
@@ -830,18 +911,27 @@ def _source_keyword_candidates(question: str, all_docs: list, source_keywords_ma
 
     scored_by_source: dict = {}
     for d in all_docs:
-        key = _source_type_key(d.metadata)
-        if key not in matched_keys:
+        keys = [_source_type_key(d.metadata)]
+        so_ky_hieu  = d.metadata.get("so_ky_hieu", "")
+        article_num = d.metadata.get("article_number") or d.metadata.get("article")
+        if so_ky_hieu and article_num:
+            keys.append(("law_article", f"{so_ky_hieu}#{article_num}"))
+        matched = [k for k in keys if k in matched_keys]
+        if not matched:
             continue
         content = d.page_content.lower()
         title = (d.metadata.get("title") or "").lower()
         score = sum(1 for w in q_words if w in content or w in title)
-        scored_by_source.setdefault(key, []).append((score, d))
+        for key in matched:
+            scored_by_source.setdefault(key, []).append((score, d))
 
-    result = []
+    result, seen = [], set()
     for scored in scored_by_source.values():
         scored.sort(key=lambda x: x[0], reverse=True)
-        result.extend(d for _, d in scored[:top_n])
+        for _, d in scored[:top_n]:
+            if id(d) not in seen:
+                seen.add(id(d))
+                result.append(d)
     return result
 
 
@@ -1131,6 +1221,62 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str, source_keyword
         elif any(_phrase_in(name, question) for name in kw_map["secondary"]):
             score += 4
 
+        # "priority" keywords boost THIS source directly and ADDITIVELY —
+        # every matched keyword's full value counts (+15 each), not just the
+        # first match — so an admin can close a gap of any size by tagging
+        # more genuinely-matching phrases instead of needing one huge number
+        # (single tier, no hard/soft — 2026-07-29 user request). This is the
+        # sole document-level lever now — a "penalty" kind (unconditional
+        # per-source deprioritization) existed briefly the same day and was
+        # removed: it needed to be BOTH applied (59/2020/QH14's Điều 26
+        # competing against 168/2025/NĐ-CP's Điều 76/77 on ELU177/178) AND
+        # not applied (Điều 26 is the correct answer on ELS066/ELU170/
+        # ELU169 — same article, different questions) — no single per-source
+        # value can satisfy both, since it can't discriminate between
+        # sibling articles of the same document. Boosting the correct
+        # article directly instead never touches a competing source's own
+        # score, so it can't cause that conflict. See
+        # database.database.PRIORITY_SCORE.
+        for name in kw_map.get("priority", ()):
+            if _phrase_in(name, question):
+                score += 15
+
+    # Per-ARTICLE tagging — everything above tags a whole document (source_key
+    # = so_ky_hieu), so it can never discriminate between two articles of the
+    # SAME document (e.g. 168/2025/NĐ-CP's Điều 76/77 vs Điều 118 — a
+    # document-wide priority tag lifts all three equally, confirmed live
+    # 2026-07-29: Điều 118 still outscored the actually-correct Điều 77 by 5
+    # points on ELU178 even after every document-level tag tried). Reuses
+    # get_source_keywords_map()/set_source_keywords() completely unchanged —
+    # they're already generic over any (source_type, source_key) pair — by
+    # using a distinct source_type="law_article" whose source_key encodes the
+    # article too ("<so_ky_hieu>#<article_number>"), per user request
+    # 2026-07-29 ("làm sao để... per-article discrimination").
+    so_ky_hieu  = metadata.get("so_ky_hieu", "")
+    article_num = metadata.get("article_number") or metadata.get("article")
+    if so_ky_hieu and article_num:
+        article_kw_map = (source_keywords_map or {}).get("law_article", {}).get(f"{so_ky_hieu}#{article_num}")
+        if article_kw_map:
+            # Article-level tagging is a single +15-per-match, stacking tier
+            # now (2026-07-29, user request: the old "Chấm điểm nguồn theo
+            # Điều" +8-flat tier and "Tăng ưu tiên theo Điều" +15-stacking
+            # tier were two separate UI sections/mechanisms doing
+            # conceptually the same job — discriminate one Điều from its
+            # siblings — so they're merged into one "Tăng ưu tiên theo Điều"
+            # section backed by the same underlying "Chấm điểm nguồn"
+            # keyword pool). Kind (primary/secondary/priority) no longer
+            # matters at this scope — every name tagged to this Điều, from
+            # whichever kind it was saved under (including tags made before
+            # this merge), scores the same way.
+            article_names = (
+                article_kw_map.get("primary", set())
+                | article_kw_map.get("secondary", set())
+                | article_kw_map.get("priority", set())
+            )
+            for name in article_names:
+                if _phrase_in(name, question):
+                    score += 15
+
     # Scenario/case-study docs are only appropriate for scenario-style
     # questions ("Anh A... có được không?") — for a general/procedure/
     # definition question, a scenario doc answering a *different*
@@ -1139,6 +1285,24 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str, source_keyword
         (metadata.get("question_type") or "").lower() == "scenario_case"
     if is_scenario_doc:
         score += 8 if intent == "scenario" else -15
+
+    # A base entity-definition article (Điều 74 "Công ty TNHH một thành
+    # viên", Điều 111 "Công ty cổ phần"...) shares near-identical
+    # retrieval_keywords with its own sibling articles about that same
+    # entity's rights/obligations/capital rules (Điều 76 quyền chủ sở hữu,
+    # Điều 77 nghĩa vụ chủ sở hữu...), so raw keyword-overlap scoring alone
+    # leaves them within 1-2 points of each other — not just for literal
+    # "là gì?" questions but also for scenario questions that hinge on
+    # whether a fact pattern still qualifies as that entity type ("mỗi
+    # người sở hữu 50%, có còn là công ty TNHH một thành viên không?" —
+    # answered by the definition article, not a rights/obligations sibling;
+    # see 2026-07-29 review, ELS022). detect_query_constraints() already
+    # classifies that kind of question as "scenario" rather than
+    # "definition" (2026-07-28 fix, see its own docstring) specifically to
+    # keep it out of unrelated procedure articles — so this boost has to
+    # fire on both intents, not "definition" alone, to actually reach it.
+    if intent in ("definition", "scenario") and metadata.get("doc_type", "") in _DEFINITION_DOC_TYPES:
+        score += 12
 
     # "Thành lập công ty X như thế nào?" questions need the establishment
     # articles (hồ sơ, trình tự đăng ký, cấp GCN — see
@@ -1248,6 +1412,18 @@ _ESTABLISHMENT_DOC_TYPES = {
     "erc_issuance", "erc_contents", "establishment_eligibility",
 }
 
+# Curated KB doc_types whose article defines what an entity type IS (as
+# opposed to a sibling article about that same entity's rights, obligations,
+# capital rules, org structure...) — verified against real content
+# (2026-07-29) one by one, not guessed from the name alone: "household_business"
+# was excluded here despite the name because its actual chunk content turned
+# out to be about online registration procedure, not a definition.
+_DEFINITION_DOC_TYPES = {
+    "definition", "single_member_llc", "multi_member_llc",
+    "jsc_definition", "partnership_definition", "private_enterprise",
+    "social_enterprise",
+}
+
 
 def classify_question(question: str, best_doc=None) -> str:
     q = question.lower()
@@ -1273,12 +1449,27 @@ def classify_question(question: str, best_doc=None) -> str:
 # layers on plain-language instructions without relaxing any of the
 # citation/hallucination QUY TẮC BẮT BUỘC below — only wording style changes.
 _VOICE_INSTRUCTIONS = {
+    # Casual previously only said "dùng từ ngữ thông dụng" with no concrete
+    # instruction to actually address the user informally — an 8B model
+    # under this prompt's many strict formatting rules defaults back to
+    # neutral/formal register with nothing distinctive to hold onto, so
+    # casual and formal output came out reading nearly identically (user
+    # report, 2026-07-29). Naming the exact pronouns ("mình"/"bạn") and
+    # concrete casual connective phrases gives it something concrete to
+    # actually produce instead of a vague style adjective.
     "casual": (
-        "\n🗣️ VĂN PHONG: Trả lời theo kiểu đời thường, dễ hiểu, như đang giải thích cho người "
-        "không rành luật — dùng câu ngắn, từ ngữ thông dụng. Nếu bắt buộc phải dùng thuật ngữ "
-        "pháp lý, giải thích ngắn gọn trong ngoặc đơn ngay sau đó. Vẫn phải giữ đúng cấu trúc "
-        "Kết luận/Phân tích/Lưu ý và đúng số Điều luật như quy định — chỉ đổi cách diễn đạt, "
-        "KHÔNG được bớt hay đổi nội dung pháp lý.\n"
+        "\n🗣️ VĂN PHONG: Trả lời bằng giọng thân thiện, tự nhiên, dễ hiểu, như đang giải thích cho "
+        "người không rành luật. Xưng \"mình\", gọi người hỏi là \"bạn\". Dùng câu ngắn và cách diễn "
+        "đạt đời thường (VD: \"nói đơn giản là...\", \"trường hợp này thì...\", \"hiểu đơn giản là...\"). "
+        "Nếu bắt buộc phải dùng thuật ngữ pháp lý, giải thích ngắn gọn trong ngoặc đơn ngay sau đó. "
+        "Vẫn phải giữ đúng cấu trúc Kết luận/Phân tích/Lưu ý và đúng số Điều luật như quy định — chỉ "
+        "đổi cách diễn đạt, KHÔNG được bớt hay đổi nội dung pháp lý, KHÔNG được giảm độ chính xác.\n"
+    ),
+    "formal": (
+        "\n🗣️ VĂN PHONG: Trả lời bằng văn phong nghiêm túc, chuyên nghiệp, phù hợp tư vấn pháp luật "
+        "hoặc văn bản hành chính. Câu văn đầy đủ, trang trọng, dùng thuật ngữ pháp lý chính xác, "
+        "KHÔNG xưng \"mình\"/gọi \"bạn\", hạn chế từ ngữ hội thoại. Ưu tiên cấu trúc kiểu \"Theo quy "
+        "định tại...\", \"Được hiểu là...\", \"Có trách nhiệm...\", \"Trong phạm vi...\".\n"
     ),
 }
 
@@ -1339,6 +1530,19 @@ Câu hỏi: {question}
         base += "Trong **Kết luận**, nêu định nghĩa. Trong **Phân tích**, giải thích chi tiết." + STRUCT
     else:
         base += STRUCT
+
+    # A tone instruction placed once, near the top, gets crowded out by the
+    # long QUY TẮC BẮT BUỘC list and the rigid Kết luận/Phân tích/Lưu ý
+    # labels that follow it — confirmed live (2026-07-29): "casual" produced
+    # zero uses of "mình"/"bạn", reading identically to "formal". Repeating
+    # a short, concrete reminder at the very end (the last thing the model
+    # reads before generating) is what actually changes small-model output.
+    if voice == "casual":
+        base += (
+            "\n\n(Nhắc lại về văn phong: xưng \"mình\", gọi người hỏi là \"bạn\", câu văn tự nhiên, "
+            "tránh lối viết như văn bản luật. Bắt buộc: phần **Lưu ý** phải mở đầu bằng cụm trực tiếp "
+            "nói với người hỏi, ví dụ \"Bạn lưu ý là...\" hoặc \"Mình lưu ý bạn là...\".)"
+        )
     return base
 
 

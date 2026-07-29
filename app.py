@@ -11,7 +11,7 @@ import io
 
 from engine.rag_engine import (
     ask_rag,
-    list_indexed_sources, delete_source, get_law_source_info,
+    list_indexed_sources, delete_source, get_law_source_info, get_law_source_articles,
     list_scenario_sources, delete_scenario_source,
     list_dataset_sources, delete_dataset_source,
 )
@@ -24,8 +24,9 @@ from database.database import (
     get_chat_title, NOTIFICATION_CHAT_TITLE, MAX_CHATS_PER_USER, MAX_MESSAGES_PER_CHAT,
     get_all_users, set_user_status, delete_user,
     change_user_password,
-    create_keyword, get_all_keywords, get_active_keywords, set_keyword_status,
-    get_source_keywords, set_source_keywords,
+    create_keyword, get_all_keywords, get_active_keywords,
+    get_active_priority_keywords, set_keyword_status, get_source_keywords,
+    set_source_keywords, MAX_KEYWORD_NAME_LENGTH, get_tagged_articles,
     get_all_dataset_files, delete_dataset_file,
 )
 from engine.import_law_engine import run_import, get_job
@@ -347,6 +348,13 @@ async def list_active_keywords_route(request: Request):
     return get_active_keywords()
 
 
+@app.get("/list_active_priority_keywords")
+async def list_active_priority_keywords_route(request: Request):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return get_active_priority_keywords()
+
+
 @app.get("/list_law_sources")
 async def list_law_sources_route(request: Request):
     if not logged_in(request) or not is_teacher(request):
@@ -403,6 +411,42 @@ async def get_source_info_route(request: Request, source_type: str = Query(...),
     return info
 
 
+
+# "law_article" tags one specific Điều within a document (source_key encodes
+# both: "<so_ky_hieu>#<article_number>") — added 2026-07-29 (user request) so
+# primary/secondary tagging can discriminate between sibling articles of the
+# same document, which document-wide tagging structurally cannot (a
+# document-wide boost lifts every article in it equally). Not in
+# _SOURCE_INFO_FNS since there's no separate "Xem thông tin" chunk-count view
+# for a single article — it's only ever written via /update_source_keywords
+# and read back via /get_article_keywords.
+_UPDATABLE_SOURCE_TYPES = set(_SOURCE_INFO_FNS) | {"law_article"}
+
+
+@app.get("/get_article_keywords")
+async def get_article_keywords_route(request: Request, source_key: str = Query(...), article_number: str = Query(...)):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    article_number = article_number.strip()
+    if not article_number:
+        return JSONResponse({"status": "error", "message": "Thiếu article_number"}, status_code=400)
+    return get_source_keywords("law_article", f"{source_key}#{article_number}")
+
+
+@app.get("/list_tagged_articles")
+async def list_tagged_articles_route(request: Request, source_key: str = Query(...)):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return {"articles": get_tagged_articles(source_key)}
+
+
+@app.get("/list_source_articles")
+async def list_source_articles_route(request: Request, source_key: str = Query(...)):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    return {"articles": get_law_source_articles(source_key)}
+
+
 @app.post("/update_source_keywords")
 async def update_source_keywords_route(request: Request):
     if not logged_in(request) or not is_teacher(request):
@@ -413,21 +457,26 @@ async def update_source_keywords_route(request: Request):
     source_key  = (data.get("source_key") or "").strip()
     primary     = data.get("primary_keyword_ids") or []
     secondary   = data.get("secondary_keyword_ids") or []
+    priority    = data.get("priority_keyword_ids") or []
 
-    if source_type not in _SOURCE_INFO_FNS:
+    if source_type not in _UPDATABLE_SOURCE_TYPES:
         return JSONResponse({"status": "error", "message": "source_type không hợp lệ."}, status_code=400)
     if not source_key:
         return JSONResponse({"status": "error", "message": "Thiếu source_key"}, status_code=400)
-    if not primary:
-        return JSONResponse({"status": "error", "message": "Vui lòng chọn ít nhất 1 Từ khóa chính."}, status_code=400)
+    # Primary/secondary are no longer required at the whole-document level —
+    # document-level authority is now expressed via priority instead
+    # (2026-07-29, user request: primary/secondary reserved for article-level
+    # tagging only, which is genuinely optional per document; penalty
+    # retired the same day — see database.database's KEYWORD_STATUS_* comment).
 
     try:
         primary_ids   = [int(x) for x in primary]
         secondary_ids = [int(x) for x in secondary]
+        priority_ids  = [int(x) for x in priority]
     except (TypeError, ValueError):
         return JSONResponse({"status": "error", "message": "ID từ khóa không hợp lệ."}, status_code=400)
 
-    set_source_keywords(source_type, source_key, primary_ids, secondary_ids)
+    set_source_keywords(source_type, source_key, primary_ids, secondary_ids, priority_ids)
     return {"status": "ok"}
 
 
@@ -444,13 +493,20 @@ async def add_keyword_route(request: Request):
     if not logged_in(request) or not is_admin(request):
         return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
 
-    data            = await request.json()
-    name            = (data.get("name") or "").strip()
-    is_out_of_scope = bool(data.get("is_out_of_scope"))
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    kind = data.get("kind") or "scoring"  # scoring|oos|priority
     if not name:
         return JSONResponse({"status": "error", "message": "Vui lòng nhập tên từ khóa."}, status_code=400)
+    if len(name) > MAX_KEYWORD_NAME_LENGTH:
+        return JSONResponse(
+            {"status": "error", "message": f"Tên từ khóa tối đa {MAX_KEYWORD_NAME_LENGTH} ký tự (hiện tại {len(name)})."},
+            status_code=400,
+        )
+    if kind not in ("scoring", "oos", "priority"):
+        return JSONResponse({"status": "error", "message": "Loại từ khóa không hợp lệ."}, status_code=400)
 
-    keyword_id = create_keyword(name, is_out_of_scope=is_out_of_scope)
+    keyword_id = create_keyword(name, kind=kind)
     if keyword_id is None:
         return JSONResponse({"status": "error", "message": f"Từ khóa '{name}' đã tồn tại."}, status_code=400)
     return {"status": "ok", "id": keyword_id}
@@ -465,8 +521,11 @@ async def toggle_keyword_status_route(request: Request):
     keyword_id = data.get("id")
     status     = data.get("status")
     # 0/1 = scoring keyword active/disabled, 2/3 = out-of-scope keyword
-    # active/disabled — see database.database's KEYWORD_STATUS_* constants.
-    if keyword_id is None or status not in (0, 1, 2, 3):
+    # active/disabled, 8/9 = priority active/disabled — see
+    # database.database's KEYWORD_STATUS_* constants (4-7 retired 2026-07-29,
+    # formerly penalty — intentionally rejected here, not just unused, so a
+    # stray old request can't silently resurrect the mechanism).
+    if keyword_id is None or status not in (0, 1, 2, 3, 8, 9):
         return JSONResponse({"status": "error", "message": "Thiếu tham số"}, status_code=400)
 
     set_keyword_status(keyword_id, status)
@@ -724,7 +783,7 @@ async def evaluate_route(
 
     if mode not in ("auto", "llm"):
         mode = "auto"
-    if split not in ("demo", "all", "test"):
+    if split not in ("demo", "all", "test", "random"):
         split = "demo"
 
     job_id = str(uuid.uuid4())
