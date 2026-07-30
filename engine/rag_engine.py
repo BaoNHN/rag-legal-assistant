@@ -699,6 +699,31 @@ _ENTITY_AGNOSTIC_DOC_TYPES = {
     # had an incorrectly auto-tagged entity_type="llc_multi_member" that
     # wrongly excluded it from JSC questions like ELU161 (2026-07-30 fix).
     "beneficial_owner_declaration",
+    # Same failure mode, different article: "Chuyển đổi doanh nghiệp tư nhân
+    # thành công ty TNHH, công ty cổ phần, công ty hợp danh" (Điều 205) is
+    # addressed to a DNTN owner considering ANY of three target types —
+    # entity-type auto-detection picked up "hợp danh" (the last type named
+    # in the title) and tagged it entity_type="partnership" specifically,
+    # so filter_compatible_docs() excluded it entirely from a question about
+    # converting to TNHH (found live 2026-07-31, ELS050: the article scored
+    # highest of all candidates — 109 vs the next at 53 — but never got the
+    # chance because the entity filter dropped it from 19 candidates down to
+    # 3 before scoring ever ran, and the LLM latched onto an unrelated
+    # scenario_qa chunk sharing generic "doanh nghiệp tư nhân" vocabulary
+    # instead, producing a completely off-topic answer). Checking the whole
+    # convert_* family after finding this one (2026-07-31) confirmed it's
+    # systemic, not a one-off: every "chuyển đổi X thành Y" article is
+    # tagged with only the TARGET entity type (convert_llc_to_jsc →
+    # entity_type="joint_stock_company", convert_jsc_to_single_llc →
+    # "llc_one_member", convert_jsc_to_multi_llc → "llc_multi_member"), so
+    # each one gets excluded whenever a question is framed from the SOURCE
+    # entity's side — which is how these questions are naturally phrased
+    # ("Công ty TNHH muốn chuyển thành công ty cổ phần...", ELS048: same
+    # symptom as Điều 205, correct article scored highest of all candidates
+    # but got filtered out before scoring ran, and Điều 204 — the reverse
+    # direction — won instead).
+    "convert_private_enterprise", "convert_llc_to_jsc",
+    "convert_jsc_to_single_llc", "convert_jsc_to_multi_llc",
 }
 
 
@@ -1073,13 +1098,32 @@ def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = N
         kw_candidates = _keyword_recall(question, all_docs)
 
         results_with_scores = vectorstore.similarity_search_with_score(rewritten_q, k=5)
+        # rewrite_query() is itself an LLM call with no guaranteed
+        # reproducibility — a differently-worded paraphrase on a different
+        # run can shift which candidates the ONE semantic search below even
+        # sees, with no fallback anchor on the original phrasing (found live
+        # 2026-07-31, ELS050: with one rewrite, Điều 205 — the correct
+        # article — won by a wide margin, 109 vs 53; with a differently-
+        # worded rewrite from a separate run, Điều 205 didn't even make the
+        # candidate pool, and an unrelated scenario_qa chunk sharing generic
+        # "doanh nghiệp tư nhân" vocabulary won a context slot instead,
+        # visibly dragging the generated answer off-topic). Also searching
+        # the untouched original question gives semantic search a second,
+        # rewrite-independent anchor — cheap (one extra vector search, no
+        # extra LLM call) since `question` is already in hand.
+        if rewritten_q != question:
+            results_with_scores += vectorstore.similarity_search_with_score(question, k=5)
         # Filter: L2 distance lower = more similar; reject docs above threshold
         semantic_candidates = [doc for doc, score in results_with_scores if score <= SIMILARITY_THRESHOLD]
         # Keyed by page_content (this function's own dedup key, see `seen`
         # below) rather than object identity — similarity_search_with_score()
         # returns its own separate Document instances from vectorstore.get()'s,
-        # so identity wouldn't survive the merge.
-        distance_by_content = {doc.page_content: score for doc, score in results_with_scores}
+        # so identity wouldn't survive the merge. min(): a doc found via both
+        # searches keeps its closer of the two distances.
+        distance_by_content: dict = {}
+        for doc, score in results_with_scores:
+            prev = distance_by_content.get(doc.page_content)
+            distance_by_content[doc.page_content] = score if prev is None else min(prev, score)
 
         merged, seen = [], set()
         for d in topic_candidates + kw_candidates + semantic_candidates:
@@ -1144,6 +1188,141 @@ def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = N
 _OFFICIAL_SOURCE_MARKERS = [
     "cổng thông tin", "chính phủ", "công báo", "vbpl.vn", "chinhphu.vn", "văn bản hợp nhất",
 ]
+
+# chroma_db carries two parallel copies of Enterprise Law — "59/2020/QH14"
+# (the original 2020 law-import) and "67/VBHN-VPQH" (the 2025 consolidated
+# text). Article-level tags (see below) were added per-copy as they came up,
+# so whichever copy happened to score lower at admin-tagging time silently
+# missed out on tags the other copy got (2026-07-31, user report: "VBHN 67
+# lép vế" — same Điều 127, VBHN copy scored 65 vs the 59/2020 copy's 83 on
+# ELS033, purely from tag coverage, not content). Mirrored at lookup time
+# (see _score_doc) so a tag added to either copy of "Điều N" now helps both
+# automatically — EXCEPT where the two copies are actually different
+# articles under the same number: this isn't just a handful of individually-
+# amended articles (a first attempt hand-listed 6 of them from the chủ sở
+# hữu hưởng lợi additions), it's whole-section renumbering — e.g.
+# so_ky_hieu=67/VBHN-VPQH's "Điều 54" is "Cơ cấu tổ chức quản lý công ty"
+# while so_ky_hieu=59/2020/QH14's "Điều 54" is "Xử lý phần vốn góp trong một
+# số trường hợp đặc biệt", found live 2026-07-31 debugging ELS020. A
+# hand-curated exclusion list can't be trusted to be exhaustive, so this
+# compares every article's actual heading text between the two copies
+# instead (user's suggestion) and excludes any pair below a similarity
+# threshold — calibrated at 0.6 against known safe pairs (e.g. "Công ty
+# TNHH một thành viên" vs "Công ty trách nhiệm hữu hạn một thành viên",
+# 0.78 — same article, just spelled out) and known-divergent ones (e.g.
+# Điều 54 above, 0.20; Điều 119 "Sổ đăng ký cổ đông" vs "Nghĩa vụ của cổ
+# đông", 0.58).
+_ENTERPRISE_LAW_SIBLING = {
+    "59/2020/QH14": "67/VBHN-VPQH",
+    "67/VBHN-VPQH": "59/2020/QH14",
+}
+_ENTERPRISE_LAW_HEADING_SIMILARITY_THRESHOLD = 0.6
+
+# Heading comparison alone can't catch this class of divergence: the 2025
+# amendments added whole new khoản to some articles (chủ sở hữu hưởng lợi
+# provisions) without changing the article's own title, so 59/2020/QH14 and
+# 67/VBHN-VPQH still read as the same heading ("Nghĩa vụ của doanh nghiệp",
+# etc.) despite VBHN 67 having content the original law never had at all
+# (confirmed live 2026-07-30, Điều 4/8/23/25/216/217). A hand-picked list of
+# "which articles got amended" isn't trustworthy either — checked instead
+# for the one phrase that's the actual marker of this entire amendment
+# package (per its own delegation clause, VBHN 67 Điều 217 khoản 6: "Chính
+# phủ quy định chi tiết... về chủ sở hữu hưởng lợi"): if it appears in one
+# copy's text for an article but not the other's, that's content divergence
+# regardless of whether the article was on today's list of known cases.
+# (Doesn't need to separately handle Điều 23/25/216/217 specifically — they
+# have zero chunks under so_ky_hieu=59/2020/QH14 at all, so there's no
+# competing chunk on that side for mirroring to wrongly boost in the first
+# place; this check only matters where both copies actually have content.)
+_ENTERPRISE_LAW_CONTENT_DIVERGENCE_MARKERS = ["chủ sở hữu hưởng lợi"]
+_enterprise_law_divergent_articles_cache: set | None = None
+
+
+def _get_enterprise_law_divergent_articles() -> set:
+    """Article numbers where the two Enterprise Law copies' headings don't
+    match closely enough to trust tag-mirroring between them. Computed once
+    (chroma_db is static within a process run) and cached — this queries the
+    whole collection, so it must not run per _score_doc() call."""
+    global _enterprise_law_divergent_articles_cache
+    if _enterprise_law_divergent_articles_cache is not None:
+        return _enterprise_law_divergent_articles_cache
+
+    headings: dict[tuple[str, str], str] = {}
+    full_text: dict[tuple[str, str], list] = {}
+    try:
+        # An article can have several dataset chunks (one per khoản, each
+        # with its own "topic" covering just that khoản), and chromadb's
+        # return order isn't meaningful, so comparing whichever chunk
+        # happened to come back first risked comparing two unrelated khoản
+        # summaries instead of the two articles' actual headings (caught
+        # live 2026-07-31: an early version flagged Điều 4 as divergent
+        # because it picked up a "Khoản 35 Điều 4" dataset chunk's own topic
+        # string, not Điều 4's real "Giải thích từ ngữ" heading). Fixed by
+        # preferring, per (so_ky_hieu, article): the import_source="law" raw
+        # full-text chunk if one exists, else the one dataset chunk whose
+        # article_reference is the bare article ("Điều N", not "Khoản X
+        # Điều N") — a whole-article summary, not a per-khoản one. Necessary
+        # because 59/2020/QH14 turns out to have ZERO law-import chunks at
+        # all (found live 2026-07-31) — every article on that side is
+        # dataset-curated, so requiring import_source="law" on both sides
+        # silently compared nothing and reported 0 divergent articles,
+        # exactly the "unverified defaults to safe" failure mode this
+        # function exists to avoid.
+        results = vectorstore.get(
+            where={"so_ky_hieu": {"$in": list(_ENTERPRISE_LAW_SIBLING.keys())}},
+            include=["metadatas", "documents"],
+        )
+        whole_article_dataset_chunks: dict[tuple[str, str], str] = {}
+        for doc_text, meta in zip(results["documents"], results["metadatas"]):
+            so_ky_hieu  = meta.get("so_ky_hieu", "")
+            article_num = meta.get("article_number", "")
+            key = (so_ky_hieu, article_num)
+            if not article_num:
+                continue
+
+            # Every chunk for this (so_ky_hieu, article) — not just the
+            # whole-article one below — feeds the content-marker check, so a
+            # marker sitting in just one khoản-level dataset chunk still
+            # counts.
+            full_text.setdefault(key, []).append(doc_text or "")
+
+            first_line = (doc_text or "").split("\n", 1)[0]
+            heading = first_line.split(".", 1)[-1].strip() if "." in first_line else first_line
+
+            if meta.get("import_source") == "law":
+                headings[key] = heading  # authoritative, always wins
+                continue
+
+            article_ref = (meta.get("article_reference") or "").strip().lower()
+            if article_ref and not article_ref.startswith("khoản") and key not in whole_article_dataset_chunks:
+                whole_article_dataset_chunks[key] = heading
+
+        for key, heading in whole_article_dataset_chunks.items():
+            headings.setdefault(key, heading)
+    except Exception:
+        _enterprise_law_divergent_articles_cache = set()
+        return _enterprise_law_divergent_articles_cache
+
+    article_nums = {k[1] for k in headings} | {k[1] for k in full_text}
+    divergent = set()
+    for article_num in article_nums:
+        h1 = headings.get(("59/2020/QH14", article_num))
+        h2 = headings.get(("67/VBHN-VPQH", article_num))
+        if h1 and h2 and similarity(h1, h2) < _ENTERPRISE_LAW_HEADING_SIMILARITY_THRESHOLD:
+            divergent.add(article_num)
+            continue
+
+        t1 = " ".join(full_text.get(("59/2020/QH14", article_num), [])).lower()
+        t2 = " ".join(full_text.get(("67/VBHN-VPQH", article_num), [])).lower()
+        if not t1 or not t2:
+            continue  # one side has no chunk at all — nothing to mirror to
+        for marker in _ENTERPRISE_LAW_CONTENT_DIVERGENCE_MARKERS:
+            if (marker in t1) != (marker in t2):
+                divergent.add(article_num)
+                break
+
+    _enterprise_law_divergent_articles_cache = divergent
+    return divergent
 
 
 def _source_type_key(metadata: dict) -> tuple:
@@ -1315,27 +1494,38 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str, source_keyword
     so_ky_hieu  = metadata.get("so_ky_hieu", "")
     article_num = metadata.get("article_number") or metadata.get("article")
     if so_ky_hieu and article_num:
-        article_kw_map = (source_keywords_map or {}).get("law_article", {}).get(f"{so_ky_hieu}#{article_num}")
-        if article_kw_map:
-            # Article-level tagging is a single +15-per-match, stacking tier
-            # now (2026-07-29, user request: the old "Chấm điểm nguồn theo
-            # Điều" +8-flat tier and "Tăng ưu tiên theo Điều" +15-stacking
-            # tier were two separate UI sections/mechanisms doing
-            # conceptually the same job — discriminate one Điều from its
-            # siblings — so they're merged into one "Tăng ưu tiên theo Điều"
-            # section backed by the same underlying "Chấm điểm nguồn"
-            # keyword pool). Kind (primary/secondary/priority) no longer
-            # matters at this scope — every name tagged to this Điều, from
-            # whichever kind it was saved under (including tags made before
-            # this merge), scores the same way.
-            article_names = (
-                article_kw_map.get("primary", set())
-                | article_kw_map.get("secondary", set())
-                | article_kw_map.get("priority", set())
-            )
-            for name in article_names:
-                if _phrase_in(name, question):
-                    score += 15
+        article_kw_maps_by_source = (source_keywords_map or {}).get("law_article", {})
+        lookup_keys = [f"{so_ky_hieu}#{article_num}"]
+        sibling = _ENTERPRISE_LAW_SIBLING.get(so_ky_hieu)
+        if sibling and article_num not in _get_enterprise_law_divergent_articles():
+            lookup_keys.append(f"{sibling}#{article_num}")
+
+        # Article-level tagging is a single +15-per-match, stacking tier
+        # now (2026-07-29, user request: the old "Chấm điểm nguồn theo
+        # Điều" +8-flat tier and "Tăng ưu tiên theo Điều" +15-stacking
+        # tier were two separate UI sections/mechanisms doing
+        # conceptually the same job — discriminate one Điều from its
+        # siblings — so they're merged into one "Tăng ưu tiên theo Điều"
+        # section backed by the same underlying "Chấm điểm nguồn"
+        # keyword pool). Kind (primary/secondary/priority) no longer
+        # matters at this scope — every name tagged to this Điều, from
+        # whichever kind it was saved under (including tags made before
+        # this merge), scores the same way. Merged across both Enterprise
+        # Law copies (see _ENTERPRISE_LAW_SIBLING) so a tag added to either
+        # copy of the same Điều helps both, instead of only whichever copy
+        # happened to be tagged directly.
+        article_names = set()
+        for key in lookup_keys:
+            article_kw_map = article_kw_maps_by_source.get(key)
+            if article_kw_map:
+                article_names |= (
+                    article_kw_map.get("primary", set())
+                    | article_kw_map.get("secondary", set())
+                    | article_kw_map.get("priority", set())
+                )
+        for name in article_names:
+            if _phrase_in(name, question):
+                score += 15
 
     # Scenario/case-study docs are only appropriate for scenario-style
     # questions ("Anh A... có được không?") — for a general/procedure/
@@ -1569,6 +1759,8 @@ def build_prompt(context: str, question: str, q_type: str,
 - KHÔNG dùng nội dung của một tình huống/case cụ thể để trả lời một câu hỏi mang tính khái quát, trừ khi người dùng thực sự hỏi về tình huống đó.
 - Với bất kỳ nội dung nào trong tài liệu không áp dụng cho câu hỏi (sai loại hình doanh nghiệp, sai đối tượng...), hãy BỎ HẲN nội dung đó khỏi câu trả lời — KHÔNG liệt kê rồi ghi chú kiểu "(không áp dụng)", vì làm vậy khiến câu trả lời mất trọng tâm.
 - Nếu Tài liệu bên dưới KHÔNG đủ để trả lời đúng câu hỏi, phải trả lời: "Không đủ dữ liệu để kết luận." thay vì suy diễn.
+- Khi câu hỏi/tình huống nêu một con số (%, ngày, năm...) và Tài liệu nêu một ngưỡng để so sánh, PHẢI so sánh đúng hai số đó trước khi kết luận (vd: 26% ĐÃ vượt ngưỡng "từ 25% trở lên" — KHÔNG được kết luận "chưa đạt 25%").
+- Nếu Tài liệu nói một nội dung "có" xuất hiện/áp dụng (kể cả khi kèm điều kiện như "nếu có"), KHÔNG suy ra ngược thành "không phải" hay "không bắt buộc" — điều kiện ("nếu có") chỉ giới hạn phạm vi áp dụng, không phủ định nội dung.
 {article_hint}
 Tài liệu:
 {context}
@@ -1585,6 +1777,23 @@ Câu hỏi: {question}
         "Bỏ hẳn dòng này nếu không có điểm mới nào để thêm]\n"
         "Tổng cộng tối đa 200 từ. Không viết gì ngoài các mục trên."
     )
+    # "general" is the default classify_question() falls back to for any
+    # scenario_case question that isn't procedure/condition/definition-shaped
+    # — which in practice is most of them. Without a completeness nudge here,
+    # the model answers only the immediate question and drops any exception/
+    # condition sitting in the retrieved context that it wasn't directly
+    # asked about, even when that exception is exactly what the correct
+    # answer hinges on (found live 2026-07-31, ELS020/ELS035/ELS050/ELU188:
+    # all scored "Kết luận đúng/chưa sai nhưng thiếu điều kiện" — the
+    # judge's most common reason string across this eval's low scores).
+    if q_type not in ("procedure", "condition", "definition"):
+        base += (
+            "Nếu Tài liệu có nêu ngoại lệ, điều kiện áp dụng, hoặc thẩm quyền/trách nhiệm khác nhau "
+            "tùy trường hợp (vd: \"trừ trường hợp...\", \"nếu được chấp thuận...\", thẩm quyền thuộc "
+            "về chủ thể khác tùy giá trị/loại giao dịch), PHẢI nêu ngoại lệ/điều kiện đó trong "
+            "**Kết luận** hoặc **Phân tích** — không được bỏ qua chỉ vì câu hỏi không hỏi trực tiếp."
+        )
+
     if q_type == "procedure":
         base += (
             "Trong **Phân tích**, liệt kê các bước theo thứ tự (1, 2, 3...). "
@@ -1595,7 +1804,22 @@ Câu hỏi: {question}
     elif q_type == "condition":
         base += "Trong **Phân tích**, liệt kê ngắn gọn từng điều kiện." + STRUCT
     elif q_type == "definition":
-        base += "Trong **Kết luận**, nêu định nghĩa. Trong **Phân tích**, giải thích chi tiết." + STRUCT
+        # "quy định về X là gì?" (one of DEFINITION_PATTERNS) — when X itself
+        # is the retrieved article's own heading (e.g. "Điều 4. Giải thích từ
+        # ngữ" for "quy định về giải thích từ ngữ là gì?"), a bare "nêu định
+        # nghĩa" instruction let the model answer at the meta level — restate
+        # what the section is about ("giải thích từ ngữ là quy định về việc
+        # giải thích các từ ngữ") — instead of stating the actual rule text
+        # sitting right there in the "Quy tắc pháp lý" line of the retrieved
+        # document. The real content still showed up correctly, just in
+        # Phân tích instead of Kết luận (found live 2026-07-31, ELK001).
+        base += (
+            "Trong **Kết luận**, nêu THẲNG nội dung quy định/định nghĩa lấy từ "
+            "\"Quy tắc pháp lý\" trong Tài liệu — KHÔNG mô tả tài liệu/điều luật "
+            "đang nói về chủ đề gì (SAI, ví dụ: \"giải thích từ ngữ là quy định về "
+            "việc giải thích các từ ngữ\"); phải nêu chính nội dung quy định đó. "
+            "Trong **Phân tích**, giải thích chi tiết thêm."
+        ) + STRUCT
     else:
         base += STRUCT
 
@@ -1610,6 +1834,26 @@ Câu hỏi: {question}
             "\n\n(Nhắc lại về văn phong: xưng \"mình\", gọi người hỏi là \"bạn\", câu văn tự nhiên, "
             "tránh lối viết như văn bản luật. Bắt buộc: phần **Lưu ý** phải mở đầu bằng cụm trực tiếp "
             "nói với người hỏi, ví dụ \"Bạn lưu ý là...\" hoặc \"Mình lưu ý bạn là...\".)"
+        )
+
+    # Same fix as the casual-voice reminder above, same reason: a rule
+    # buried in the QUY TẮC BẮT BUỘC list (read once, long before the model
+    # gets to the question) wasn't enough on its own — tested live
+    # 2026-07-31 on the exact case this names (26% vs "từ 25% trở lên"),
+    # llama-3.1-8b-instant still answered "chưa đạt 25%" for 26% with that
+    # earlier version in place. Repeated here, genuinely last (after STRUCT
+    # and the casual-voice block), where it's the last thing read before
+    # generation starts. Widened from "\d+\s*%" to any digit run
+    # (2026-07-31, ELS062) — the same failure mode hits plain-count caps
+    # too: asked whether 60 investors fit a "tối đa 50 thành viên" cap, the
+    # model correctly quoted the 50-member limit and then still concluded
+    # the 60-person group qualified.
+    if re.search(r'\d', question):
+        base += (
+            "\n\n(Nhắc lại: câu hỏi có nêu số liệu (%, số người, số ngày...). Trước khi viết Kết luận, "
+            "tự so sánh con số đó với ngưỡng nêu trong Tài liệu — vd: 26% so với ngưỡng \"từ 25% trở "
+            "lên\" nghĩa là ĐÃ đạt/vượt ngưỡng; 60 so với giới hạn \"tối đa 50\" nghĩa là ĐÃ VƯỢT giới "
+            "hạn, không phải \"phù hợp\"/\"đáp ứng điều kiện\". Viết phép so sánh đó ra trước khi kết luận.)"
         )
     return base
 
