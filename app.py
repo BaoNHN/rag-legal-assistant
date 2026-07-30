@@ -8,6 +8,18 @@ import re
 import time
 import uuid
 import io
+import warnings
+
+# Silence two known-harmless, third-party UserWarnings (see
+# evaluate/evaluate_rag.py's matching filter for the full explanation):
+# gdown 4.4.0 (transitive dep of vietocr, imported below via
+# engine.import_law_engine for PDF OCR) still uses deprecated pkg_resources;
+# openpyxl warns on Excel conditional-formatting/data-validation features it
+# doesn't parse when reading uploaded .xlsx files, without affecting the
+# actual cell data read. Registered before the import_law_engine import below.
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated.*")
+warnings.filterwarnings("ignore", message=".*Conditional Formatting extension.*")
+warnings.filterwarnings("ignore", message=".*Data Validation extension.*")
 
 from engine.rag_engine import (
     ask_rag,

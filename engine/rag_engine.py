@@ -1055,12 +1055,31 @@ def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = N
         results_with_scores = vectorstore.similarity_search_with_score(rewritten_q, k=5)
         # Filter: L2 distance lower = more similar; reject docs above threshold
         semantic_candidates = [doc for doc, score in results_with_scores if score <= SIMILARITY_THRESHOLD]
+        # Keyed by page_content (this function's own dedup key, see `seen`
+        # below) rather than object identity — similarity_search_with_score()
+        # returns its own separate Document instances from vectorstore.get()'s,
+        # so identity wouldn't survive the merge.
+        distance_by_content = {doc.page_content: score for doc, score in results_with_scores}
 
         merged, seen = [], set()
         for d in topic_candidates + kw_candidates + semantic_candidates:
             if d.page_content not in seen:
                 merged.append(d)
                 seen.add(d.page_content)
+
+        # Stamp the embedding distance onto every candidate that had one,
+        # regardless of which path (topic/keyword/semantic) actually pulled
+        # it into the pool — _score_doc reads this to keep a strong semantic
+        # match from losing to a chunk that only entered via keyword-tag
+        # recall and never showed real embedding proximity (2026-07-30, see
+        # that function's own comment: ELD037's correct Điều 17 ranked #2 by
+        # raw bge-m3 similarity — distance 0.75 vs. threshold 1.3 — yet lost
+        # to Điều 52, which never appeared in the semantic top-5 at all,
+        # purely on keyword-tag stacking).
+        for d in merged:
+            dist = distance_by_content.get(d.page_content)
+            if dist is not None:
+                d.metadata["_embedding_distance"] = dist
 
         # ===== SOURCE-KEYWORD AUGMENTATION =====
         # See _source_keyword_candidates() docstring — guarantees a tagged
@@ -1129,6 +1148,24 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str, source_keyword
     content = d.page_content.lower()
     metadata = d.metadata
 
+    # Embedding-similarity bonus — bge-m3 can correctly rank a chunk #2 out
+    # of hundreds by raw semantic distance, then have every keyword-overlap
+    # signal below still lose it to a chunk that only entered the candidate
+    # pool via keyword-tag recall and never showed real semantic proximity
+    # (found 2026-07-30, ELD037: correct Điều 17 at L2 distance 0.75 — well
+    # inside SIMILARITY_THRESHOLD's 1.3 cutoff — lost to Điều 52, which
+    # wasn't even in the raw top-5 semantic results). retrieve_docs() stamps
+    # "_embedding_distance" (lower = closer) onto every candidate that
+    # appeared in the raw semantic search, regardless of which path actually
+    # pulled it into the pool; docs that never showed up there (topic/
+    # keyword/tag-only hits) get no bonus here, not a penalty — additive-only,
+    # same philosophy as the keyword-priority tags below. Scaled so a very
+    # close match (~0.75) is worth about two priority-tag matches (~30),
+    # tapering to ~0 at the threshold itself.
+    embedding_distance = metadata.get("_embedding_distance")
+    if embedding_distance is not None:
+        score += max(0, round((SIMILARITY_THRESHOLD - embedding_distance) * 20))
+
     # keyword overlap
     for w, cnt in q_counter.items():
         if w in content:
@@ -1170,11 +1207,6 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str, source_keyword
         if art_num and art_num[0] in question:
             score += 5
 
-    # prioritize KB articles
-    nguon = metadata.get("nguon_thu_thap", "")
-    if "KB_Articles" in nguon:
-        score += 2
-
     # Source-tier priority: official law text > standardized KB > raw Q&A
     # dataset. Markers/thresholds taken from what's actually indexed
     # today (see engine.rag_engine module — law chunks are tagged
@@ -1183,13 +1215,21 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str, source_keyword
     # kw_word_weight above let a merely topically-adjacent official article
     # systematically outrank the actually-correct curated chunk on scenario
     # questions with repeated common terms (see kw_word_weight comment).
+    # KB_Articles tier (+2) must stay below the official-source tier (+6) —
+    # a separate "kb_articles_updated" +10 stacked on top of this used to
+    # push KB chunks to +12, ABOVE official law text, contradicting this
+    # comment's own stated order (found 2026-07-30, user review); removed.
+    nguon = metadata.get("nguon_thu_thap", "")
     nguon_lower = nguon.lower()
     if any(marker in nguon_lower for marker in _OFFICIAL_SOURCE_MARKERS):
         score += 6
-    if "kb_articles_updated" in nguon_lower:
-        score += 10
-    if "dataset_200" in nguon_lower:
-        score -= 3
+    elif "kb_articles" in nguon_lower:
+        score += 2
+    # "dataset_200" scoring removed 2026-07-30: the 2026-07-28 dataset-leak
+    # fix took every Dataset_*/Demo_* Q&A sheet out of ChromaDB entirely
+    # (only KB_Articles*/Legal_Update_2025 stay indexed) — no chunk in
+    # chroma_db has carried "dataset_200" in nguon_thu_thap since, so this
+    # branch was unreachable dead code (verified live, 0/543 chunks).
 
     # Admin/teacher-tagged keyword boost (see database.database.keyword /
     # source_keyword tables) — this is the generic, extensible replacement
@@ -1315,46 +1355,54 @@ def _score_doc(question: str, d, q_counter: Counter, intent: str, source_keyword
         score += 25
 
     # "Hộ kinh doanh" (household business) questions need Nghị định
-    # 168/2025/NĐ-CP content specifically — Luật Doanh nghiệp (so_ky_hieu
-    # 59/2020/QH14 / 67/VBHN-VPQH) covers company registration, a DIFFERENT
-    # legal instrument that happens to share heavy vocabulary overlap ("hồ
-    # sơ", "giấy chứng nhận", "cơ quan đăng ký kinh doanh") with hộ kinh
-    # doanh procedures. Without this, "hồ sơ" alone in a hộ kinh doanh
-    # question triggers the procedure-intent boost above for
-    # company-registration articles (curated KB rows, which DO have a
-    # doc_type), while the correct hộ kinh doanh article in NĐ 168/2025 (a
-    # plain law-import chunk with no doc_type) gets none — see 2026-07-29
-    # review, ELU186: "Điều 26 (Luật Doanh nghiệp)" outranked the exactly-
-    # matching "Điều 115 Nghị định 168/2025/NĐ-CP" this way even though
-    # Điều 115 is a word-for-word match for the question.
-    if _phrase_in("hộ kinh doanh", question) and (
-        "168/2025" in metadata.get("so_ky_hieu", "") or _phrase_in("hộ kinh doanh", content)
-    ):
-        score += 25
-    # A +25 boost alone wasn't enough — company-registration articles (KB-
-    # curated rows) stack so many OTHER bonuses (procedure +25, "dataset"
-    # 3x keyword weight, kb_articles_updated +10, exact-phrase +10 for
-    # sharing "cơ quan đăng ký kinh doanh" with the question) that even
-    # boosted, the correct hộ kinh doanh article still lost 59 vs 96
-    # (measured live, 2026-07-29, ELU186). Company registration
+    # 168/2025/NĐ-CP's dedicated hộ kinh doanh chapter (Điều 81-124)
+    # specifically — Luật Doanh nghiệp (so_ky_hieu 59/2020/QH14 /
+    # 67/VBHN-VPQH) covers company registration, a DIFFERENT legal
+    # instrument that happens to share heavy vocabulary overlap ("hồ sơ",
+    # "giấy chứng nhận", "cơ quan đăng ký kinh doanh") with hộ kinh doanh
+    # procedures. This used to be a hardcoded phrase-check boost here; moved
+    # to the admin-managed keyword table instead (2026-07-30, user request)
+    # — "hộ kinh doanh" is now a priority keyword tagged (source_type=
+    # "law_article") onto every Điều 81-124 chunk, the same mechanism as any
+    # other admin-tagged topic. See database.database.get_source_keywords_map.
+    #
+    # The doc_type penalty below stays in code, though: company registration
     # (_ESTABLISHMENT_DOC_TYPES) and household-business registration are
     # different legal regimes — a hộ kinh doanh question is NEVER correctly
     # answered by one of these, so penalize directly instead of just
-    # boosting the competition and hoping it's enough.
+    # boosting the competition and hoping it's enough (measured live
+    # 2026-07-29/30, ELU186: even with every priority tag on Điều 115 plus
+    # this section's keyword-table boost, the correct article still lost to
+    # "Điều 26, Luật Doanh nghiệp" without this penalty — company-
+    # registration KB rows stack too many other additive bonuses: procedure
+    # +25, dataset 3x keyword weight, exact-phrase +10). This is
+    # deliberately NOT expressed as a keyword-table priority tag: the
+    # keyword system is additive-boost-only by design (see
+    # database.database's "penalty kind... removed" note) — a per-source
+    # penalty was tried there once (2026-07-29) and reverted the same day
+    # because it couldn't discriminate sibling articles that are sometimes
+    # right, sometimes wrong. This rule doesn't have that failure mode: it
+    # keys off doc_type (a whole document-family split, not a specific
+    # so_ky_hieu/article), and hộ kinh doanh vs. company registration is a
+    # structural, always-true exclusion, not a per-question judgment call.
     if _phrase_in("hộ kinh doanh", question) and metadata.get("doc_type", "") in _ESTABLISHMENT_DOC_TYPES:
         score -= 40
 
-    # "Chuyển đổi loại hình doanh nghiệp" articles (convert_jsc_to_single_llc,
-    # convert_llc_to_jsc...) share almost all of their vocabulary with a
-    # plain "thành lập/là gì" question about the resulting entity type
-    # ("công ty TNHH một thành viên" appears in both a definition article AND
-    # "chuyển đổi công ty cổ phần THÀNH công ty TNHH một thành viên"), which
-    # was enough to tie with — and by iteration-order luck, sometimes beat —
-    # the actually relevant article (see 2026-07-25 "Điều 203 in Nguồn tham
-    # khảo" report). Penalize unless the question is actually about
-    # conversion.
-    if metadata.get("doc_type", "").startswith("convert_") and not _phrase_in("chuyển đổi", question):
-        score -= 20
+    # scenario_qa illustrative examples (the "BO_20_TINH_HUONG..." batch)
+    # carry no so_ky_hieu/article_reference at all — structurally incapable
+    # of ever producing a valid "Căn cứ pháp lý" line (build_legal_basis_line
+    # returns "" for an empty article_ref). bge-m3 can rank one of these
+    # essentially tied with, or ahead of, the actual correct law article when
+    # the scenario happens to closely paraphrase the question (found
+    # 2026-07-30, ELD040: an unrelated "Ông Khoa" nominee-ownership example
+    # scored 78, edging out the correct Điều 18 chunk at 70) — winning would
+    # mean the answer cites nothing at all, a worse failure mode than citing
+    # a wrong-but-real Điều. Dampened as a multiplier (not a flat penalty)
+    # so it still surfaces as *context* for the LLM's own reasoning when nothing
+    # else is close, just doesn't win best_doc/citation purely on topical
+    # overlap with zero citation to show for it.
+    if metadata.get("doc_type") == "scenario_qa":
+        score = round(score * 0.5)
 
     return score
 
