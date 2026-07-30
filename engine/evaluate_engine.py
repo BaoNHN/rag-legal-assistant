@@ -43,13 +43,17 @@ JUDGE_MODEL = "llama-3.3-70b-versatile"
 # every time a new one is written.
 KEEP_LATEST_EVAL_FILES = 2
 
-# Full Evaluation (mode=llm) used to score every row in every Dataset_* sheet
-# (up to 200 questions) — each question costs a Groq call (RAG answer) plus
-# another Groq call (LLM judge), so a full run burns ~400 calls and several
-# minutes of wall time. Random-sampling down to a fixed size keeps a full
-# run affordable while still exercising a broad, shuffled slice of the
-# dataset each time (see run_evaluation's split == "all" branch).
-FULL_EVAL_SAMPLE_SIZE = 80
+# Full Evaluation (mode=llm, split="all"/"test") scores every row in every
+# Dataset_* sheet with no cap — the whole point of "full" — each question
+# costs a Groq call (RAG answer) plus another Groq call (LLM judge), so a
+# 200-question run burns ~400 calls; groqkey.txt's multi-key rotation (see
+# groq_keys.py, 2026-07-29) is what makes that affordable instead of
+# stalling on one account's rate limit partway through.
+#
+# Kiểm tra ngẫu nhiên ("random" split) is the fast spot-check instead: a
+# fixed-size random sample pulled from Demo_*+Dataset_* combined, per user
+# request 2026-07-29.
+RANDOM_EVAL_SAMPLE_SIZE = 50
 LATEST_RESULT_PATH     = os.path.join(BASE_DIR, "eval_results_latest.json")
 
 # ── Job registry ─────────────────────────────────────────────────────────────
@@ -97,6 +101,10 @@ _TEMPLATE_FILENAMES = {"example_sheet.xlsx"}
 # and list_available_datasets() actually key off of, so renaming a sheet to
 # anything not starting with "Demo_"/"Dataset_" makes it invisible to both
 # evaluation modes and to the dataset dropdown.
+#
+# Kiểm tra ngẫu nhiên (mode=llm, split="random") combines Demo_* AND Dataset_*
+# together, then randomly samples RANDOM_EVAL_SAMPLE_SIZE questions — a
+# scored (not keyword) spot-check that's cheaper than a true Full run.
 
 
 def list_available_datasets() -> list:
@@ -413,7 +421,7 @@ def _extract_retry_after(e: Exception) -> float | None:
 
 # ── LLM scorer (Groq) ─────────────────────────────────────────────────────────
 def _llm_score(question: str, generated: str, expected: str,
-               article_ref: str, groq_key: str, job_id: str = None) -> dict:
+               article_ref: str, job_id: str = None) -> dict:
     """LLM-judge scoring. On total judge failure (Groq unreachable / response
     never parses to JSON after every retry) returns {"connection_error": True}
     instead of a score — this is an external connectivity/API failure, not a
@@ -424,11 +432,21 @@ def _llm_score(question: str, generated: str, expected: str,
     questions, several of which had answers matching the expected answer
     almost verbatim — the RAG system wasn't at fault, the judge call was."""
     from langchain_groq import ChatGroq
-    llm = ChatGroq(api_key=groq_key, model=JUDGE_MODEL, temperature=0)
+    from engine.groq_keys import get_keys, current_key, rotate_key, is_rate_limit_error
+
+    keys = get_keys()
+    llm = ChatGroq(api_key=current_key(), model=JUDGE_MODEL, temperature=0)
     # Lazily created only if a ValueError retry actually needs it (see below) —
     # a second client at a non-zero temperature so a retry isn't just the
-    # first, deterministic call played back verbatim.
+    # first, deterministic call played back verbatim. Reset to None whenever
+    # the key rotates so it gets rebuilt against the new key instead of
+    # silently keeping the old (possibly rate-limited) one.
     llm_warm = None
+    used_warm = False
+    # Free key rotations tried before falling back to a timed backoff — a 429
+    # on one key says nothing about a sibling key's limit, so trying the next
+    # key costs no wall-clock time.
+    key_rotations_left = max(len(keys) - 1, 0)
 
     # Same split _auto_score already uses for its word-count/clarity check —
     # the "📖 Nguồn chính / 📎 Nguồn tham khảo" footer (see build_citation() in
@@ -487,13 +505,16 @@ Chỉ trả về JSON, không giải thích thêm. Ví dụ:
 
     # Backoff: 15s, 30s, 60s, 90s, 120s
     wait_times = [15, 30, 60, 90, 120]
-    for attempt in range(len(wait_times) + 1):
+    value_error_retries = 0
+    backoff_attempt = 0
+    while True:
         try:
-            # First attempt uses the deterministic temp=0 client; if that
-            # response gets rejected below (ValueError), later attempts use
-            # the warmed-up client instead so a retry can actually land on a
-            # different response (see the ValueError handler).
-            active_llm = llm if attempt == 0 else (llm_warm or llm)
+            # The deterministic temp=0 client is used until a ValueError
+            # rejects its response (see that handler below), at which point
+            # later attempts switch to the warmed-up client so a retry can
+            # actually land on a different response instead of replaying the
+            # same deterministic one verbatim.
+            active_llm = llm_warm if used_warm and llm_warm else llm
             response = active_llm.invoke(prompt).content.strip()
             # Anchor on "legal_accuracy" actually appearing inside the
             # matched span — a bare `\{[^}]+\}` can grab an unrelated
@@ -563,23 +584,36 @@ Chỉ trả về JSON, không giải thích thêm. Ví dụ:
             # tested on this exact ELK006 case, 0.3 still landed all-zero on
             # 2/2 tries; 0.7 broke out of it on 3/3 tries (still imperfect
             # scores sometimes, but never all five axes at 0 again).
-            if attempt < 2:
+            if value_error_retries < 2:
                 if llm_warm is None:
-                    llm_warm = ChatGroq(api_key=groq_key, model=JUDGE_MODEL, temperature=0.7)
-                print(f"  [retry {attempt + 1}/2] temperature=0.7, no wait (temp=0 response was invalid) — {str(e)[:120]}")
+                    llm_warm = ChatGroq(api_key=current_key(), model=JUDGE_MODEL, temperature=0.7)
+                used_warm = True
+                value_error_retries += 1
+                print(f"  [retry {value_error_retries}/2] temperature=0.7, no wait (temp=0 response was invalid) — {str(e)[:120]}")
             else:
                 print(f"  [FAIL] LLM scoring failed — judge response invalid on every attempt: {e}")
                 break
         except Exception as e:
-            if attempt < len(wait_times):
+            # A 429 on this key says nothing about a sibling key's limit —
+            # rotate first, for free, before spending any wall-clock time on
+            # the fixed backoff schedule below.
+            if is_rate_limit_error(e) and key_rotations_left > 0:
+                key_rotations_left -= 1
+                llm = ChatGroq(api_key=rotate_key(), model=JUDGE_MODEL, temperature=0)
+                llm_warm = None
+                used_warm = False
+                print(f"  [429] Groq key rate-limited — rotating key ({key_rotations_left} left, no wait)")
+                continue
+            if backoff_attempt < len(wait_times):
                 server_wait = _extract_retry_after(e)
                 if server_wait is not None:
                     wait = server_wait
-                    print(f"  [429] Rate limit - retry {attempt + 1}/{len(wait_times)} "
+                    print(f"  [429] Rate limit - retry {backoff_attempt + 1}/{len(wait_times)} "
                           f"after {wait}s (server-reported)...")
                 else:
-                    wait = wait_times[attempt]
-                    print(f"  [retry {attempt + 1}/{len(wait_times)}] after {wait}s — {str(e)[:120]}")
+                    wait = wait_times[backoff_attempt]
+                    print(f"  [retry {backoff_attempt + 1}/{len(wait_times)}] after {wait}s — {str(e)[:120]}")
+                backoff_attempt += 1
                 if job_id:
                     # Lets the frontend's poll loop space its /evaluate_status
                     # requests out to match this wait instead of hammering it
@@ -589,6 +623,7 @@ Chỉ trả về JSON, không giải thích thêm. Ví dụ:
                 time.sleep(wait)
             else:
                 print(f"  [FAIL] LLM scoring failed after all retries: {e}")
+                break
 
     # Groq unreachable, or its response never parsed to valid JSON, on every
     # retry — an external failure, not a scoreable answer.
@@ -732,7 +767,9 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
     """
     Evaluate the RAG system.
     mode         : "auto" (fast, keyword matching) | "llm" (Groq-based, accurate)
-    split        : "demo" (all Demo_* sheets in the file) | "all"/"test" (all Dataset_* sheets)
+    split        : "demo" (all Demo_* sheets) | "random" (50 random questions
+                   sampled from Demo_*+Dataset_* combined) | "all"/"test" (every
+                   Dataset_* sheet, in full — no sampling)
     dataset_file : filename (not path) of an .xlsx in DATASET_DIR (Dataset/), as
                    returned by list_available_datasets(). Falls back to the
                    newest known dataset file when omitted.
@@ -763,6 +800,17 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
                 _set(job_id, status="failed",
                      message=f"❌ File '{dataset_label}' không có sheet Demo — không thể chạy Quick Evaluation cho file này.")
                 return
+        elif split == "random":
+            df_demo, matched_demo = _combine_sheets(xl, "Demo_")
+            df_full, matched_full = _combine_sheets(xl, "Dataset_")
+            df = pd.concat([df_demo, df_full], ignore_index=True)
+            if "id" in df.columns:
+                df = df.drop_duplicates(subset="id", keep="last").reset_index(drop=True)
+            matched = matched_demo + matched_full
+            if df.empty:
+                _set(job_id, status="failed",
+                     message=f"❌ File '{dataset_label}' không có sheet Demo/Dataset nào — không thể chạy Kiểm tra ngẫu nhiên cho file này.")
+                return
         else:
             df, matched = _combine_sheets(xl, "Dataset_")
             if df.empty:
@@ -773,21 +821,20 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
                 df = df[df["split"] == "test"]
 
         total_available = len(df)
-        if split == "all" and total_available > FULL_EVAL_SAMPLE_SIZE:
-            df = df.sample(n=FULL_EVAL_SAMPLE_SIZE).reset_index(drop=True)
+        if split == "random" and total_available > RANDOM_EVAL_SAMPLE_SIZE:
+            df = df.sample(n=RANDOM_EVAL_SAMPLE_SIZE).reset_index(drop=True)
 
         n = len(df)
         sample_note = f" — lấy mẫu ngẫu nhiên {n}/{total_available} câu" if n < total_available else ""
         _set(job_id, message=f"Bắt đầu đánh giá {n} câu hỏi (mode={mode}, split={split}){sample_note}…", progress=0)
 
-        # Resolve Groq key for LLM mode
-        groq_key = None
+        # Resolve Groq key(s) for LLM mode — groqkey.txt may hold several,
+        # semicolon-separated, rotated by engine.groq_keys on rate limits.
+        groq_available = False
         if mode == "llm":
-            key_path = os.path.join(BASE_DIR, "groqkey.txt")
-            if os.path.exists(key_path):
-                with open(key_path) as f:
-                    groq_key = f.read().strip()
-            if not groq_key:
+            from engine.groq_keys import get_keys
+            groq_available = bool(get_keys())
+            if not groq_available:
                 mode = "auto"
                 _set(job_id, message="⚠️ Không có Groq key — chuyển sang auto mode…")
 
@@ -851,8 +898,8 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
                 _mark_connection_error()
                 continue
 
-            if mode == "llm" and groq_key:
-                sc = _llm_score(question, generated, expected, art_ref, groq_key, job_id=job_id)
+            if mode == "llm" and groq_available:
+                sc = _llm_score(question, generated, expected, art_ref, job_id=job_id)
                 time.sleep(3)   # ~20 req/min → stay under Groq free-tier limit
             else:
                 sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
@@ -973,6 +1020,14 @@ def _run_cli(mode: str, split: str):
     demo_sheet = next((s for s in ["Demo_50", "Demo_30"] if s in sheets), None)
     if split == "demo" and demo_sheet:
         df = xl.parse(demo_sheet)
+    elif split == "random":
+        df_demo, _ = _combine_sheets(xl, "Demo_")
+        df_full, _ = _combine_sheets(xl, "Dataset_")
+        df = pd.concat([df_demo, df_full], ignore_index=True)
+        if "id" in df.columns:
+            df = df.drop_duplicates(subset="id", keep="last").reset_index(drop=True)
+        if len(df) > RANDOM_EVAL_SAMPLE_SIZE:
+            df = df.sample(n=RANDOM_EVAL_SAMPLE_SIZE).reset_index(drop=True)
     else:
         ds_sheet = next(
             (s for s in ["Dataset_200", "Dataset_150"] if s in sheets),
@@ -987,16 +1042,12 @@ def _run_cli(mode: str, split: str):
 
     n = len(df)
 
-    # Resolve Groq key
-    groq_key = None
-    if mode == "llm":
-        key_path = os.path.join(BASE_DIR, "groqkey.txt")
-        if os.path.exists(key_path):
-            with open(key_path) as f:
-                groq_key = f.read().strip()
-        if not groq_key:
-            print("[!] groqkey.txt not found — switching to auto mode")
-            mode = "auto"
+    # Resolve Groq key(s)
+    from engine.groq_keys import get_keys
+    groq_available = bool(get_keys())
+    if mode == "llm" and not groq_available:
+        print("[!] groqkey.txt not found — switching to auto mode")
+        mode = "auto"
 
     print(f"\nEvaluating {n} questions  |  mode={mode}  |  split={split}")
     if mode == "llm":
@@ -1065,8 +1116,8 @@ def _run_cli(mode: str, split: str):
 
             # ── Step 2: Score ──
             pbar.set_description(f"[{q_id}] Scoring...")
-            if mode == "llm" and groq_key:
-                sc = _llm_score(question, generated, expected, art_ref, groq_key)
+            if mode == "llm" and groq_available:
+                sc = _llm_score(question, generated, expected, art_ref)
                 time.sleep(3)
             else:
                 sc = _auto_score(question, generated, expected, art_ref, keywords, retrieved_context, exp_ctx)
@@ -1156,8 +1207,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate RAG system (standalone)")
     parser.add_argument("--mode",  choices=["auto", "llm"], default="auto",
                         help="auto = fast keyword scoring | llm = Groq LLM scoring")
-    parser.add_argument("--split", choices=["demo", "all", "test"], default="demo",
-                        help="demo = 30 questions | all = full dataset | test = test split")
+    parser.add_argument("--split", choices=["demo", "all", "test", "random"], default="demo",
+                        help="demo = Demo_* sheets | all = full dataset (no cap) | test = test split | random = 50 random questions from Demo_*+Dataset_* combined")
     args = parser.parse_args()
 
     _run_cli(mode=args.mode, split=args.split)
