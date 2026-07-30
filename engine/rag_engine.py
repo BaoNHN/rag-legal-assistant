@@ -821,9 +821,23 @@ def extract_topic_from_question(question: str) -> str | None:
 # is not tuned for Vietnamese legal numerals), so we match it against the
 # article_number metadata exactly instead of relying on vector similarity.
 # =========================
-def extract_article_number_from_question(question: str) -> str | None:
-    m = re.search(r'điều\s+(\d+[a-z]?)\b', question, re.IGNORECASE)
-    return m.group(1) if m else None
+def extract_article_number_from_question(question: str) -> list[str]:
+    """Every distinct "Điều N" number mentioned, in the order first seen.
+    Was re.search (first match only) until 2026-07-31 — a comparison
+    question naming two articles ("Phân biệt Điều 119 và Điều 120...") only
+    ever captured the first, and retrieve_docs()'s exact-match short-circuit
+    then returned ONLY Điều 119 chunks, so Điều 120 never entered the
+    candidate pool at all. Every generated answer then mentioned "Điều 120"
+    (the question demands a comparison) with nothing in context to back it,
+    so validate_answer_citations() rejected all 3 retry attempts and the
+    question fell through to the "couldn't find a matching answer" fallback
+    (ELU189, found live 2026-07-31)."""
+    seen = []
+    for m in re.finditer(r'điều\s+(\d+[a-z]?)\b', question, re.IGNORECASE):
+        n = m.group(1)
+        if n not in seen:
+            seen.append(n)
+    return seen
 
 
 # =========================
@@ -945,7 +959,7 @@ def _source_keyword_candidates(question: str, all_docs: list, source_keywords_ma
 # =========================
 def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = None):
     topic = extract_topic_from_question(question)
-    article_num = extract_article_number_from_question(question)
+    article_nums = extract_article_number_from_question(question)
 
     try:
         results = vectorstore.get(include=["documents", "metadatas"])
@@ -960,10 +974,16 @@ def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = N
         # ===== EXACT ARTICLE NUMBER MATCH =====
         # "Điều 143" etc. — filter on article_number metadata exactly instead
         # of trusting embedding similarity to find the right numbered article.
-        if article_num:
-            exact = [d for d in all_docs if d.metadata.get("article_number", "") == article_num]
+        # Capped per-number (not one flat slice across all of them) so a
+        # comparison question naming two articles doesn't let one number's
+        # chunks crowd the other entirely out of the returned pool.
+        if article_nums:
+            exact = []
+            for num in article_nums:
+                matches = [d for d in all_docs if d.metadata.get("article_number", "") == num]
+                exact.extend(matches[:3])
             if exact:
-                return exact[:5]
+                return exact
 
         # ===== STRICT TOPIC MATCH =====
         # For a bare generic noun ("doanh nghiệp") the SequenceMatcher ratio
