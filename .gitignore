@@ -3,6 +3,7 @@
 
 # Secrets — never commit real API keys
 /groqkey.txt
+session_secret.txt
 
 # Runtime artifacts — regenerated, not needed to run the app
 __pycache__/
