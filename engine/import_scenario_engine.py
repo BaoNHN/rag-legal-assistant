@@ -206,6 +206,10 @@ def _build_case_doc(case: dict, source_label: str, importer: str) -> Document:
         "retrieval_keywords": "; ".join(case["keywords"]),
         "char_count":         len(content),
         "importer":           importer,
+        # See import_law_engine.py's identical field for the full rationale —
+        # new imports start "pending", excluded from RAG until an admin
+        # publishes them (per user request 2026-08-08).
+        "publish_status":     "pending",
     }
     entity_type = detect_entity_type(f"{case['topic']} {content}")
     if entity_type:

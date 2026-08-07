@@ -38,9 +38,12 @@ _RAG_ERROR_TEXT = "Lỗi hệ thống"
 # uses well under that.
 JUDGE_MODEL = "llama-3.3-70b-versatile"
 
-# There's no UI to browse historical eval runs, only the most recent one
-# matters — keep disk clutter down by pruning older eval_results_*.xlsx files
-# every time a new one is written.
+# There's no UI to browse historical eval runs, only the most recent ones
+# matter — keep disk clutter down by pruning older eval_results_*.xlsx files
+# every time a new one is written. Scoped per (pipeline, dataset_file) by
+# _record_eval_result — each dataset keeps its own latest-`KEEP_LATEST_EVAL_FILES`
+# window independent of every other dataset (2026-08-08 user request), not one
+# global budget shared across whichever dataset happened to run most recently.
 KEEP_LATEST_EVAL_FILES = 2
 
 # Full Evaluation (mode=llm, split="all"/"test") scores every row in every
@@ -55,6 +58,15 @@ KEEP_LATEST_EVAL_FILES = 2
 # request 2026-07-29.
 RANDOM_EVAL_SAMPLE_SIZE = 50
 LATEST_RESULT_PATH     = os.path.join(BASE_DIR, "eval_results_latest.json")
+
+# Vanilla RAG baseline comparison track (see run_evaluation's `pipeline`
+# param and engine.rag_engine.ask_rag_vanilla) — kept entirely separate from
+# the main custom-pipeline history above: its own latest-result index file,
+# its own "eval_results_vanilla_*" file prefix, and its own independent
+# per-dataset KEEP_LATEST_EVAL_FILES budget (see _record_eval_result) so
+# running a vanilla comparison never ages out or gets confused with the
+# custom pipeline's own results, per user request 2026-08-07.
+LATEST_VANILLA_RESULT_PATH = os.path.join(BASE_DIR, "eval_results_vanilla_latest.json")
 
 # ── Job registry ─────────────────────────────────────────────────────────────
 _jobs: dict = {}
@@ -630,38 +642,18 @@ Chỉ trả về JSON, không giải thích thêm. Ví dụ:
     return {"connection_error": True}
 
 
-def _prune_old_eval_files(keep: int = KEEP_LATEST_EVAL_FILES):
-    """Keep only the `keep` most recently modified eval_results_*.xlsx runs.
-
-    eval_low_score_*.xlsx / eval_connection_errors_*.xlsx are auxiliary sheets
-    tied to one specific run — they share the same "<stem>_<split>_<mode>_<ts>"
-    suffix as their eval_results_ file. They are NOT pruned by their own
-    mtime ranking (that would let one survive independently of, or get
-    deleted ahead of, the eval_results_ run it belongs to) — instead each one
-    is deleted the moment its parent eval_results_ file ages out of the kept
-    set, and never lingers as an orphan sheet with no matching run."""
-    files = [
-        f for f in os.listdir(BASE_DIR)
-        if f.startswith("eval_results_") and f.lower().endswith(".xlsx")
-    ]
-    files.sort(key=lambda f: os.path.getmtime(os.path.join(BASE_DIR, f)), reverse=True)
-
-    kept_suffixes = {f[len("eval_results_"):] for f in files[:keep]}
-    for f in files[keep:]:
-        try:
-            os.remove(os.path.join(BASE_DIR, f))
-        except Exception:
-            pass
-
-    for prefix in ("eval_low_score_", "eval_connection_errors_"):
-        for f in os.listdir(BASE_DIR):
-            if not (f.startswith(prefix) and f.lower().endswith(".xlsx")):
-                continue
-            if f[len(prefix):] not in kept_suffixes:
-                try:
-                    os.remove(os.path.join(BASE_DIR, f))
-                except Exception:
-                    pass
+def _classify_pipeline_file(f: str, kind_prefix: str) -> str | None:
+    """Returns "vanilla"/"custom" if `f` is an eval-family file of the given
+    kind_prefix (e.g. "eval_results_", "eval_low_score_"), else None. The
+    vanilla variant always inserts a "vanilla_" segment right after the kind
+    prefix (see run_evaluation's filename construction), so it must be
+    checked first — "eval_results_vanilla_...xlsx" also starts with the bare
+    "eval_results_" prefix and would otherwise misclassify as custom."""
+    if f.startswith(kind_prefix + "vanilla_"):
+        return "vanilla"
+    if f.startswith(kind_prefix):
+        return "custom"
+    return None
 
 
 # ── Low-score sheet export ────────────────────────────────────────────────────
@@ -676,24 +668,74 @@ def _low_score_mask(df_res: "pd.DataFrame"):
 
 
 def _export_low_score_sheet(df_res: "pd.DataFrame", out_dir: str, dataset_stem: str,
-                            split: str, mode: str, ts: str) -> str | None:
+                            split: str, mode: str, ts: str, pipeline: str = "custom") -> str | None:
     """Writes a filtered sheet of every question with at least one rubric
     criterion scored 0 or 1, so a low overall run can be triaged without
     re-reading all 200 rows. Returns the filename, or None if nothing qualifies."""
     low_df = df_res[_low_score_mask(df_res)]
     if low_df.empty:
         return None
-    out_path = os.path.join(out_dir, f"eval_low_score_{dataset_stem}_{split}_{mode}_{ts}.xlsx")
+    pipeline_tag = "vanilla_" if pipeline == "vanilla" else ""
+    out_path = os.path.join(out_dir, f"eval_low_score_{pipeline_tag}{dataset_stem}_{split}_{mode}_{ts}.xlsx")
     low_df.to_excel(out_path, index=False)
     return os.path.basename(out_path)
 
 
-def _save_latest_result(summary_payload: dict):
+def _load_result_index(path: str) -> dict:
+    """Loads the {dataset_file: [summary_payload, ...]} index at `path`.
+    Treats a pre-migration flat single-summary JSON (the old format, before
+    per-dataset history existed — recognizable by "avg_total" sitting at the
+    top level instead of one level down inside a dataset's list) as absent:
+    it's a derived cache, not a data file, so discarding it just means one
+    dataset's "kết quả gần nhất" gets rebuilt from disk on next lookup
+    instead of migrated in place — see _get_latest_result_for's xlsx fallback."""
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and "avg_total" not in data:
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _record_eval_result(dataset_label: str, summary_payload: dict, path: str,
+                        keep: int = KEEP_LATEST_EVAL_FILES) -> None:
+    """Appends `summary_payload` to the FRONT of dataset_label's own history
+    (most-recent-first) inside the index at `path`, keeps only the latest
+    `keep` entries, and deletes the on-disk xlsx files (output/low-score/
+    connection-error) belonging to any entry that falls out of that window.
+
+    Each dataset file now keeps its own independent latest-`keep` retention,
+    separate from every other dataset — per user request 2026-08-08: running
+    an eval on dataset B was previously sharing one global latest-2 budget
+    with dataset A, so it could silently delete dataset A's still-relevant
+    recent history, and the Vanilla RAG comparison could end up comparing two
+    runs from two different datasets without anyone noticing. `path` already
+    separates the "custom" and "vanilla" pipelines (LATEST_RESULT_PATH vs
+    LATEST_VANILLA_RESULT_PATH), so this also keeps each pipeline's per-
+    dataset retention independent of the other's."""
+    index = _load_result_index(path)
+    history = index.get(dataset_label) or []
+    history.insert(0, summary_payload)
+    kept, dropped = history[:keep], history[keep:]
+    index[dataset_label] = kept
+
     try:
-        with open(LATEST_RESULT_PATH, "w", encoding="utf-8") as f:
-            json.dump(summary_payload, f, ensure_ascii=False)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False)
     except Exception:
         pass
+
+    for old in dropped:
+        for key in ("output_file", "low_score_file", "connection_error_file"):
+            fname = old.get(key)
+            if fname:
+                try:
+                    os.remove(os.path.join(BASE_DIR, fname))
+                except Exception:
+                    pass
 
 
 def _summary_from_xlsx(path: str) -> dict:
@@ -735,22 +777,41 @@ def _summary_from_xlsx(path: str) -> dict:
     }
 
 
-def get_latest_eval_result() -> dict:
-    """Returns the persisted summary of the most recent evaluation run for the
-    Evaluate tab to show on open. Falls back to reconstructing it from the
-    newest eval_results_*.xlsx on disk (and persists that reconstruction) if
-    no run has completed since eval_results_latest.json was introduced.
-    Returns None if no evaluation result exists at all."""
-    if os.path.exists(LATEST_RESULT_PATH):
-        try:
-            with open(LATEST_RESULT_PATH, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
+def _get_latest_result_for(path: str, pipeline: str, dataset_file: str = None) -> dict:
+    """Shared lookup behind get_latest_eval_result()/get_latest_vanilla_eval_result().
+
+    dataset_file given  : that dataset's own most recent entry (or None if
+                           this dataset has never been run on this pipeline
+                           yet — deliberately NOT guessed from disk, since a
+                           dataset's stem isn't unambiguously recoverable
+                           from an "eval_results_<stem>_<split>_<mode>_<ts>"
+                           filename when the stem itself can contain
+                           underscores; once a run happens through
+                           run_evaluation() the index has an exact, unambiguous
+                           key and this stops mattering).
+    dataset_file omitted : the single most recent entry across every dataset
+                           (by generated_at) — used by the main score card on
+                           page load, which shows "whatever ran last"
+                           regardless of dataset.
+    Falls back to reconstructing from the newest eval_results_*.xlsx on disk
+    (and records that reconstruction into the index) only for the
+    no-dataset-filter case, if the index has nothing at all yet."""
+    index = _load_result_index(path)
+
+    if dataset_file:
+        history = index.get(dataset_file)
+        return history[0] if history else None
+
+    newest = None
+    for history in index.values():
+        if history and (newest is None or history[0].get("generated_at", "") > newest.get("generated_at", "")):
+            newest = history[0]
+    if newest:
+        return newest
 
     files = [
         f for f in os.listdir(BASE_DIR)
-        if f.startswith("eval_results_") and f.lower().endswith(".xlsx")
+        if _classify_pipeline_file(f, "eval_results_") == pipeline and f.lower().endswith(".xlsx")
     ]
     if not files:
         return None
@@ -758,12 +819,31 @@ def get_latest_eval_result() -> dict:
 
     summary = _summary_from_xlsx(os.path.join(BASE_DIR, files[0]))
     if summary:
-        _save_latest_result(summary)
+        if pipeline == "vanilla":
+            summary["pipeline"] = "vanilla"
+        _record_eval_result(summary.get("dataset_file") or "unknown", summary, path)
     return summary
 
 
+def get_latest_eval_result(dataset_file: str = None) -> dict:
+    """Returns the persisted summary of the most recent CUSTOM-pipeline
+    evaluation run — scoped to `dataset_file`'s own latest-2 history if
+    given, else the single most recent run across every dataset (see
+    _get_latest_result_for). Returns None if nothing matches."""
+    return _get_latest_result_for(LATEST_RESULT_PATH, "custom", dataset_file)
+
+
+def get_latest_vanilla_eval_result(dataset_file: str = None) -> dict:
+    """Same as get_latest_eval_result() but for the separate Vanilla RAG
+    baseline comparison track (see run_evaluation's `pipeline` param) —
+    entirely independent index so running a comparison never clobbers, or
+    gets confused with, the main custom-pipeline eval history above."""
+    return _get_latest_result_for(LATEST_VANILLA_RESULT_PATH, "vanilla", dataset_file)
+
+
 # ── Main background task ──────────────────────────────────────────────────────
-def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None):
+def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None,
+                   pipeline: str = "custom"):
     """
     Evaluate the RAG system.
     mode         : "auto" (fast, keyword matching) | "llm" (Groq-based, accurate)
@@ -773,7 +853,20 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
     dataset_file : filename (not path) of an .xlsx in DATASET_DIR (Dataset/), as
                    returned by list_available_datasets(). Falls back to the
                    newest known dataset file when omitted.
+    pipeline     : "custom" (engine.rag_engine.ask_rag — the full hybrid
+                   retrieval + 8-factor rerank + citation-validation pipeline)
+                   | "vanilla" (engine.rag_engine.ask_rag_vanilla — a plain
+                   LangChain similarity_search + single-prompt baseline, same
+                   vectorstore/embeddings/LLM). Exists to answer the defense
+                   question "what score would plain vector-search RAG get?"
+                   with a real measured run instead of an estimate. Results,
+                   output filenames, latest-result index, and the per-dataset
+                   pruning budget (_record_eval_result) are all kept separate
+                   from the "custom" pipeline's own history — see
+                   LATEST_VANILLA_RESULT_PATH.
     """
+    if pipeline not in ("custom", "vanilla"):
+        pipeline = "custom"
     if dataset_file:
         # Sanitize: filename only, no path traversal outside DATASET_DIR.
         xlsx_path = os.path.join(DATASET_DIR, os.path.basename(dataset_file))
@@ -838,7 +931,8 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
                 mode = "auto"
                 _set(job_id, message="⚠️ Không có Groq key — chuyển sang auto mode…")
 
-        from engine.rag_engine import ask_rag
+        from engine.rag_engine import ask_rag, ask_rag_vanilla
+        answer_fn = ask_rag_vanilla if pipeline == "vanilla" else ask_rag
 
         results             = []
         connection_error_rows = []
@@ -867,7 +961,7 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
 
             retrieved_context = ""
             try:
-                result = ask_rag(question, return_debug=True)
+                result = answer_fn(question, return_debug=True)
                 if isinstance(result, dict):
                     generated         = result["answer"]
                     retrieved_context = result.get("retrieved_context", "")
@@ -950,21 +1044,20 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
 
         ts           = datetime.now().strftime("%Y%m%d_%H%M%S")
         dataset_stem = os.path.splitext(dataset_label)[0]
-        out_path     = os.path.join(BASE_DIR, f"eval_results_{dataset_stem}_{split}_{mode}_{ts}.xlsx")
+        pipeline_tag = "vanilla_" if pipeline == "vanilla" else ""
+        out_path     = os.path.join(BASE_DIR, f"eval_results_{pipeline_tag}{dataset_stem}_{split}_{mode}_{ts}.xlsx")
         df_res.to_excel(out_path, index=False)
 
-        low_score_file  = _export_low_score_sheet(df_res, BASE_DIR, dataset_stem, split, mode, ts)
+        low_score_file  = _export_low_score_sheet(df_res, BASE_DIR, dataset_stem, split, mode, ts, pipeline=pipeline)
         low_score_count = 0 if not low_score_file else int(_low_score_mask(df_res).sum())
 
         conn_err_file = None
         if connection_error_rows:
             conn_err_file = os.path.join(
-                BASE_DIR, f"eval_connection_errors_{dataset_stem}_{split}_{mode}_{ts}.xlsx"
+                BASE_DIR, f"eval_connection_errors_{pipeline_tag}{dataset_stem}_{split}_{mode}_{ts}.xlsx"
             )
             pd.DataFrame(connection_error_rows).to_excel(conn_err_file, index=False)
             conn_err_file = os.path.basename(conn_err_file)
-
-        _prune_old_eval_files()
 
         summary_payload = {
             "total_questions":      len(results),
@@ -981,10 +1074,20 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
             "output_file":     os.path.basename(out_path),
             "mode":            mode,
             "split":           split,
+            "pipeline":        pipeline,
             "dataset_file":    dataset_label,
             "sheets_used":     matched,
+            "generated_at":    ts,
         }
-        _save_latest_result(summary_payload)
+        # Records this run into dataset_label's own history and prunes that
+        # SAME dataset's older runs down to KEEP_LATEST_EVAL_FILES — see
+        # _record_eval_result's docstring for why this replaced a single
+        # global "latest 2 regardless of dataset" budget.
+        _record_eval_result(
+            dataset_label,
+            summary_payload,
+            path=LATEST_VANILLA_RESULT_PATH if pipeline == "vanilla" else LATEST_RESULT_PATH,
+        )
 
         done_msg = f"✅ Đánh giá hoàn tất! Điểm tổng: {avg_total}/100"
         if connection_error_rows:
@@ -1003,8 +1106,10 @@ def run_evaluation(job_id: str, mode: str, split: str, dataset_file: str = None)
 
 
 # ── CLI entrypoint (with tqdm progress bar) ───────────────────────────────────
-def _run_cli(mode: str, split: str):
-    """Interactive terminal run with live progress bar and running score."""
+def _run_cli(mode: str, split: str, pipeline: str = "custom"):
+    """Interactive terminal run with live progress bar and running score.
+    pipeline: "custom" (ask_rag) | "vanilla" (ask_rag_vanilla baseline) — see
+    run_evaluation's docstring."""
     from tqdm import tqdm
 
     xlsx_path = os.path.join(DATASET_DIR, "enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx")
@@ -1056,7 +1161,8 @@ def _run_cli(mode: str, split: str):
     else:
         print()
 
-    from engine.rag_engine import ask_rag
+    from engine.rag_engine import ask_rag, ask_rag_vanilla
+    answer_fn = ask_rag_vanilla if pipeline == "vanilla" else ask_rag
 
     results               = []
     connection_error_rows = []
@@ -1085,7 +1191,7 @@ def _run_cli(mode: str, split: str):
             pbar.set_description(f"[{q_id}] RAG...")
             retrieved_context = ""
             try:
-                result = ask_rag(question, return_debug=True)
+                result = answer_fn(question, return_debug=True)
                 if isinstance(result, dict):
                     generated         = result["answer"]
                     retrieved_context = result.get("retrieved_context", "")
@@ -1105,7 +1211,7 @@ def _run_cli(mode: str, split: str):
                     "article_ref":   art_ref,
                 })
 
-            # See run_evaluation's identical check — ask_rag() itself has no
+            # See run_evaluation's identical check — ask_rag()/ask_rag_vanilla() have no
             # retry, so a Groq failure inside it surfaces as this placeholder
             # string rather than a raised exception.
             if _RAG_ERROR_TEXT in generated:
@@ -1163,17 +1269,18 @@ def _run_cli(mode: str, split: str):
         for d, grp in df_res.groupby("difficulty"):
             by_diff[d] = round(grp["score_total"].mean(), 1)
 
-    ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join(BASE_DIR, f"eval_results_{split}_{mode}_{ts}.xlsx")
+    ts           = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pipeline_tag = "vanilla_" if pipeline == "vanilla" else ""
+    out_path     = os.path.join(BASE_DIR, f"eval_results_{pipeline_tag}{split}_{mode}_{ts}.xlsx")
     df_res.to_excel(out_path, index=False)
 
     if connection_error_rows:
-        conn_err_path = os.path.join(BASE_DIR, f"eval_connection_errors_{split}_{mode}_{ts}.xlsx")
+        conn_err_path = os.path.join(BASE_DIR, f"eval_connection_errors_{pipeline_tag}{split}_{mode}_{ts}.xlsx")
         pd.DataFrame(connection_error_rows).to_excel(conn_err_path, index=False)
 
     W = 55
     print(f"\n{'='*W}")
-    print(f"  TONG DIEM : {avg_total}/100   ({len(results)} cau, {mode} mode)")
+    print(f"  TONG DIEM : {avg_total}/100   ({len(results)} cau, {mode} mode, {pipeline} pipeline)")
     print(f"{'='*W}")
     for k, avg in avg_scores.items():
         label  = RUBRIC_LABELS.get(k, k)
@@ -1209,6 +1316,8 @@ if __name__ == "__main__":
                         help="auto = fast keyword scoring | llm = Groq LLM scoring")
     parser.add_argument("--split", choices=["demo", "all", "test", "random"], default="demo",
                         help="demo = Demo_* sheets | all = full dataset (no cap) | test = test split | random = 50 random questions from Demo_*+Dataset_* combined")
+    parser.add_argument("--pipeline", choices=["custom", "vanilla"], default="custom",
+                        help="custom = full hybrid retrieval + rerank pipeline (ask_rag) | vanilla = plain LangChain similarity_search baseline (ask_rag_vanilla), for defense comparison")
     args = parser.parse_args()
 
-    _run_cli(mode=args.mode, split=args.split)
+    _run_cli(mode=args.mode, split=args.split, pipeline=args.pipeline)

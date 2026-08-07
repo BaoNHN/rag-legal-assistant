@@ -245,10 +245,14 @@ window.isGuest = false;
 
     if (data.user_type === "teacher" || data.user_type === "admin") {
       document.getElementById("importLawBtn").classList.add("visible");
+      // Manage Law is teacher-accessible too (read-only + keyword tagging,
+      // no delete — see manage_law.html's own IS_ADMIN-gated delete button
+      // and app.py's is_teacher-gated routes). Only account management
+      // stays admin-only.
+      document.getElementById("manageLawBtn").classList.add("visible");
     }
     if (data.user_type === "admin") {
       document.getElementById("manageAccountBtn").classList.add("visible");
-      document.getElementById("manageLawBtn").classList.add("visible");
       badge.innerHTML = '<span class="role-badge admin">Quản trị viên</span>';
     } else if (data.user_type === "teacher") {
       badge.innerHTML = '<span class="role-badge teacher">Giảng viên</span>';

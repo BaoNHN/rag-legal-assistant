@@ -20,6 +20,7 @@
 12. [Câu Hỏi Demo Gợi Ý](#12-câu-hỏi-demo-gợi-ý)
 13. [Kiến Trúc Kỹ Thuật](#13-kiến-trúc-kỹ-thuật)
 14. [Xử Lý Sự Cố](#14-xử-lý-sự-cố)
+15. [Cập Nhật Mới Nhất (2026-08-08)](#15-cập-nhật-mới-nhất-2026-08-08)
 
 ---
 
@@ -194,6 +195,8 @@ Hệ thống có **3 vai trò**, phân biệt bằng cột `role` trong bảng `
 
 > Chat của học sinh và giáo viên tách biệt hoàn toàn (cột `role` trong bảng `chats`), kể cả khi cùng một `user_id`.
 
+> **Mới 2026-08-08:** câu hỏi giới hạn tối đa **150 từ** — nhập quá sẽ bị chặn ngay (không gọi server) kèm cảnh báo "⚠️ Câu hỏi quá dài (N từ). Vui lòng rút gọn còn tối đa 150 từ." Xem chi tiết ở mục 15.5.
+
 ---
 
 ## 6. Demo Nhập Văn Bản Luật (PDF / DOCX) — Vai Trò Giáo Viên
@@ -322,6 +325,7 @@ Tại trang `/import`, nhấn tab **"📚 Tình huống"**.
 - **Không** gán số ký hiệu (`so_ky_hieu`) cho các đoạn tình huống — một tình huống có thể trích nhiều điều luật từ nhiều văn bản khác nhau cùng lúc (VD vừa Luật Doanh nghiệp vừa Nghị định 168/2025/NĐ-CP), nên hệ thống không tự gán một mã văn bản duy nhất để tránh trích dẫn sai nguồn. Khi trả lời, các đoạn này vẫn được dùng để truy xuất ngữ nghĩa bình thường, chỉ không tự sinh dòng "📖 Nguồn chính" theo số ký hiệu cho riêng chúng.
 - Xoá một bộ tình huống đã import: dùng trang **Manage Law** (mục 11) → tab **Tình huống**, xoá theo tên file gốc.
 - *(thêm 2026-07-28)* Trang Manage Law **không** có nút "Xem thông tin" cho tab Tình huống (và Dataset) — từ khóa của 2 loại này chỉ tự sinh lúc import, không xem/sửa tay được qua giao diện. Muốn đổi, phải xoá rồi import lại.
+- *(mới 2026-08-08)* Nếu người dùng gõ **gần như nguyên văn** dòng `Tình huống:`, dòng `Câu hỏi:`, hoặc bất kỳ `Câu hỏi tương đương:` nào của một tình huống đã import, hệ thống **nhận diện đúng ngay tình huống đó**, bỏ qua toàn bộ bước tính điểm truy xuất/rerank — xem chi tiết mục 15.4.
 
 ---
 
@@ -448,6 +452,8 @@ File `Dataset/example_sheet.xlsx` minh hoạ đúng quy ước đặt tên: shee
 
 Chế độ `auto` so khớp trích dẫn bằng cách trích số Điều từ `article_reference` của bộ câu hỏi rồi tìm chuỗi `"điều N"` trong câu trả lời. Với các trích dẫn phức tạp hơn (VD `"Khoản 35 Điều 4"`, `"Điều 17 Nghị định 168/2025/NĐ-CP"`, hoặc nhiều điều gộp `"Điều 27; Điều 38"`), hệ thống chỉ lấy đúng số theo sau từ "Điều" trong chuỗi tham chiếu — **không** gộp lẫn số Khoản/số Nghị định/số năm vào cùng một số Điều như trước (lỗi đã sửa ngày 2026-07-21, xem mục 14). Điểm `auto` vẫn là ước lượng nhanh dựa trên từ khóa, không thay thế được chấm `llm` (Full Evaluation) khi cần độ chính xác cao.
 
+> **Mới 2026-08-08:** thêm khu vực **"🧪 So sánh với Vanilla RAG (baseline)"** ngay bên dưới — chạy lại Full Evaluation nhưng thay retrieval/rerank tùy biến bằng RAG cơ bản của LangChain (chỉ `similarity_search`), để đo đúng phần đóng góp của bộ rerank 8 yếu tố. Việc lưu "2 kết quả gần nhất" cũng đổi từ **1 hạn mức chung cho mọi dataset** sang **hạn mức riêng theo từng dataset** — chạy đánh giá trên dataset B không còn xoá mất lịch sử của dataset A. Xem chi tiết ở mục 15.1 và 15.2.
+
 ---
 
 ## 10. Demo Quản Lý Tài Khoản — Vai Trò Admin
@@ -556,6 +562,10 @@ Tab thứ 4 **"🧪 Kiểm thử hồi quy"** chạy bộ test nhanh (không g�
 2. Sau khi xong, mỗi câu hiện ✅/❌ kèm `expected`/`got_best`, và cảnh báo nếu tài liệu bị cấm (entity-type sai) vẫn lọt vào danh sách sau lọc
 3. Hệ thống chỉ giữ **2 lần chạy gần nhất** trong `regression_results_history.json` — mở lại tab sẽ tự hiện các lần chạy đã lưu (`GET /latest_regression_results`) mà không cần chạy lại
 4. Nên chạy lại sau khi sửa logic truy xuất/rerank trong `engine/rag_engine.py`, hoặc sau khi import dữ liệu luật mới — xem thêm `evaluate/retrieval_regression_tests.py` (dùng chung logic với `engine/regression_test_engine.py`, script CLI này cũng chạy độc lập được: `python evaluate/retrieval_regression_tests.py`)
+
+> **Mới 2026-08-08 — Publish / Pending:** cả 3 bảng (Văn bản pháp luật/Dataset/Tình huống) có thêm cột **"Trạng thái"** + nút **Publish**/**Chuyển Pending** (chỉ Admin thao tác được). Nguồn mới nhập luôn ở **Pending** — RAG hoàn toàn không dùng để trả lời cho tới khi Admin bấm **Publish**. Dữ liệu import trước ngày này được tự động chuyển thành **Published** khi khởi động lại server, để không làm gián đoạn chatbot đang chạy. Xem chi tiết ở mục 15.3.
+>
+> **Sửa lỗi 2026-08-08:** nút **"🗂️ Quản lý văn bản luật"** trên sidebar trang chat trước đây chỉ hiện cho Admin dù trang `/manage_law` đã hỗ trợ Teacher từ 2026-07-28 (mục trên) — Teacher phải gõ thẳng URL mới vào được. Đã sửa để nút hiện đúng cho cả 2 vai trò.
 
 ---
 
@@ -995,3 +1005,72 @@ DEVICE=cuda
 - Hệ thống có cơ chế **retry tự động** khi Groq bị rate limit (3 lần, backoff 5s/10s/15s)
 - Admin quản lý được vòng đời tài khoản (kích hoạt/vô hiệu hóa/xoá), import tài khoản hàng loạt kèm báo cáo lỗi chi tiết, và quản lý/xoá dữ liệu đã import theo cả 3 luồng (văn bản luật, dataset, tình huống)
 - *(mới 2026-07-28)* Chấm điểm ưu tiên nguồn giờ **mở rộng được qua giao diện** (bảng `keyword`/`source_keyword`, mục 13.8) thay vì phải sửa code mỗi khi có văn bản luật mới — Giáo viên cũng được xem/sửa từ khóa của văn bản (không xoá được); Admin quản lý thêm tab Từ khóa riêng, dùng chung cơ chế cho cả danh sách chặn câu hỏi ngoài phạm vi (mục 13.9)
+
+---
+
+## 15. Cập Nhật Mới Nhất (2026-08-08)
+
+Năm thay đổi trong cùng một đợt cập nhật — mỗi mục dưới đây nêu rõ **là gì / vì sao / cách test** để người kiểm thử không cần đọc code.
+
+### 15.1 Vanilla RAG Baseline — So Sánh Đối Chứng (Ablation Study)
+
+**Là gì:** Một pipeline trả lời thứ hai, `ask_rag_vanilla()` trong `engine/rag_engine.py` — đúng nghĩa RAG cơ bản của LangChain: chỉ `vectorstore.similarity_search()` top-5 (không rerank, không lọc loại hình doanh nghiệp, không kiểm tra lại trích dẫn), một prompt tổng quát, một lần gọi LLM duy nhất. Dùng **cùng** vectorstore, cùng embedding (bge-m3), cùng LLM với pipeline chính (`ask_rag()`) — biến duy nhất khác là chiến lược truy xuất.
+
+**Vì sao:** Trả lời câu hỏi phản biện "nếu bỏ bộ rerank 8 yếu tố đi, dùng RAG cơ bản thì điểm bao nhiêu?" bằng số đo thật thay vì ước lượng. Kết quả đo thật trên 220 câu (2026-08-07): pipeline tùy biến **89.6/100**, Vanilla RAG **75.9/100** — chênh **+13.7 điểm (+18.1%)**.
+
+**Cách test:**
+1. Vào `/import` → tab **"📊 Dataset"** → khu vực **"🧪 So sánh với Vanilla RAG (baseline)"** (dưới khu vực Đánh giá hệ thống RAG chính).
+2. Bấm **"🧪 Chạy Vanilla RAG (Đánh giá Đầy đủ)"** — chạy Full Evaluation với dataset đang chọn, nhưng qua `ask_rag_vanilla`.
+3. Sau khi xong, khu vực này tự hiện điểm Vanilla RAG **và** dòng so sánh trực tiếp với điểm pipeline tùy biến gần nhất **của đúng dataset đó** (không so nhầm giữa 2 dataset khác nhau).
+4. Cũng chạy được qua dòng lệnh: `python -m engine.evaluate_engine --mode llm --split all --pipeline vanilla`.
+
+### 15.2 Lưu Trữ Kết Quả Đánh Giá — Theo Từng Dataset (không còn dùng chung 1 hạn mức)
+
+**Là gì:** Trước đây "chỉ giữ 2 kết quả gần nhất" (mục 9, Bước 3) là **1 hạn mức chung** cho mọi dataset — chạy đánh giá dataset B có thể xoá mất lịch sử dataset A. Giờ mỗi dataset (`enterprise_law_..._200_updated.xlsx`, một dataset khác, v.v.) giữ **lịch sử 2 lần chạy riêng của chính nó**, cho cả pipeline tùy biến (`eval_results_latest.json`) lẫn Vanilla RAG (`eval_results_vanilla_latest.json`) — 2 file JSON này giờ có cấu trúc `{"<tên_dataset>": [lần_gần_nhất, lần_trước_đó]}` thay vì 1 object phẳng.
+
+**Cách test:** Chạy Full Evaluation trên 2 file dataset khác nhau (nếu có) lần lượt — mở lại tab, đổi dropdown dataset qua lại, xác nhận điểm hiển thị đúng theo dataset đang chọn, không lẫn lộn.
+
+### 15.3 Publish / Pending — Kiểm Soát Nguồn Nào RAG Được Dùng
+
+**Là gì:** Mọi nguồn (Văn bản pháp luật / Dataset / Tình huống) giờ có trạng thái **Pending** hoặc **Published**, lưu ở metadata `publish_status` trên từng đoạn trong ChromaDB:
+- **Nguồn mới nhập → mặc định Pending.** RAG **hoàn toàn không dùng** nguồn Pending để trả lời — bị loại ở mọi bước truy xuất (`retrieve_docs()`, tìm kiếm semantic, retriever dự phòng).
+- Dữ liệu import **trước** 2026-08-08 được tự động chuyển thành **Published** ngay khi khởi động lại server lần đầu sau bản cập nhật (không cần thao tác gì) — chatbot đang chạy không bị gián đoạn.
+- Chỉ **Admin** thấy nút đổi trạng thái; Giáo viên chỉ thấy badge trạng thái (read-only), khớp với quyền hạn hiện có ở tab Văn bản pháp luật.
+
+**Cách test:**
+1. Vào `/manage_law`, đăng nhập Admin.
+2. Ở tab bất kỳ (Văn bản pháp luật/Dataset/Tình huống), mỗi dòng có cột **"Trạng thái"** (badge xanh "Đã publish" / vàng "Pending") và nút tương ứng.
+3. Bấm **"Chuyển Pending"** trên một nguồn đang Published — xác nhận → thử hỏi RAG một câu chắc chắn cần nguồn đó, RAG sẽ không dùng được nguồn này nữa (câu trả lời đổi hẳn hoặc báo không tìm thấy thông tin liên quan).
+4. Bấm **"Publish"** lại — RAG dùng được nguồn đó ngay lập tức, không cần restart server.
+5. API trực tiếp (nếu cần test qua Postman/curl): `POST /set_source_publish_status` với body `{"source_type": "law"|"dataset"|"scenario", "source_key": "<so_ky_hieu|tên file>", "status": "published"|"pending"}`.
+
+> **Sửa lỗi liên quan:** nút **"🗂️ Quản lý văn bản luật"** trên sidebar trang chat trước đây chỉ hiện cho Admin dù `/manage_law` đã hỗ trợ Giáo viên từ 2026-07-28 — Giáo viên phải gõ thẳng URL mới vào được trang. Đã sửa (`templates/index.html`) để nút hiện đúng cho cả 2 vai trò.
+
+### 15.4 Nhận Diện Chính Xác Tình Huống Đã Import (Exact Scenario Match)
+
+**Là gì:** Nếu câu hỏi người dùng gõ **gần như nguyên văn** một trong các phần của một tình huống đã import (mục 7) — dòng `Tình huống:` (mô tả đầy đủ), dòng `Câu hỏi:` (câu hỏi ngắn), hoặc bất kỳ dòng `Câu hỏi tương đương:` nào — hệ thống nhận diện đúng ngay tình huống đó (`retrieve_docs()`'s "EXACT SCENARIO MATCH", `engine/rag_engine.py`), bỏ qua hoàn toàn bước tính điểm truy xuất theo chủ đề/từ khóa/semantic và bộ rerank 8 yếu tố. Câu trả lời vẫn được LLM sinh ra bình thường (có trích dẫn, không trả thẳng văn bản thô) — chỉ bước **chọn đúng tài liệu nguồn** là được bỏ qua vì đã chắc chắn 100%.
+
+So khớp không phân biệt hoa/thường, khoảng trắng thừa, và dấu câu kết thúc (`?`/`.`/`!`) — nhưng vẫn là so khớp **chính xác** sau khi chuẩn hoá, không mờ (VD đổi "17 tuổi" thành "18 tuổi" sẽ **không** khớp nhầm).
+
+**Cách test:** Import file tình huống mẫu (mục 7, có sẵn ví dụ TLDN_001 — "Nam 17 tuổi, được cha mẹ cho 500 triệu đồng và muốn tự đứng tên thành lập Công ty TNHH một thành viên Nam Việt để kinh doanh thiết bị điện tử."). Hỏi RAG đúng nguyên văn câu trên, hoặc câu hỏi ngắn hơn "Nam 17 tuổi có thể tự đứng tên thành lập công ty TNHH một thành viên không?" — cả 2 đều trả lời thẳng dựa trên tình huống TLDN_001, không qua truy xuất thông thường.
+
+### 15.5 Giới Hạn 150 Từ Cho Mỗi Câu Hỏi
+
+**Là gì:** Câu hỏi nhập vào ô chat giới hạn tối đa **150 từ** (`MAX_QUESTION_WORDS` — kiểm tra ở cả `static/script.js`, phía client, cho phản hồi tức thì, và `app.py` route `/get`, phía server, là lớp có hiệu lực thật).
+
+**Vì sao:** Câu hỏi càng dài càng loãng tín hiệu truy xuất — từ khóa khớp chiếm tỷ trọng nhỏ hơn trong tổng số từ, và vector embedding trung bình hoá nhiều ý sẽ trôi xa khỏi đúng chủ đề pháp lý cụ thể. 150 từ đủ rộng cho cả câu hỏi tình huống chi tiết (VD TLDN_001 chỉ ~35-40 từ) nhưng chặn được việc dán nguyên văn bản dài vào ô hỏi.
+
+**Cách test:** Gõ hoặc dán một đoạn trên 150 từ vào ô chat, bấm Gửi — bị chặn ngay (không gọi server) kèm cảnh báo "⚠️ Câu hỏi quá dài (N từ). Vui lòng rút gọn còn tối đa 150 từ." Câu hỏi bình thường (dưới 150 từ, kể cả câu tình huống dài) vẫn gửi được bình thường.
+
+### 15.6 Danh Sách File Đã Thay Đổi (tham khảo nhanh cho review code)
+
+| File | Thay đổi chính |
+|---|---|
+| `engine/rag_engine.py` | `ask_rag_vanilla()`, exact scenario match, `publish_status` filter + backfill + `set_source_publish_status()` |
+| `engine/evaluate_engine.py` | Tham số `pipeline` (custom/vanilla), lưu trữ kết quả theo từng dataset (`_record_eval_result`) |
+| `engine/import_law_engine.py`, `import_dataset_engine.py`, `import_scenario_engine.py` | Gắn `publish_status="pending"` cho mọi đoạn mới nhập |
+| `app.py` | Route `/set_source_publish_status`, giới hạn `MAX_QUESTION_WORDS` ở `/get`, `/evaluate` nhận thêm `pipeline` |
+| `templates/index.html` | Sửa nút "Quản lý văn bản luật" hiện đúng cho Giáo viên |
+| `templates/import_law.html` | Khu vực so sánh Vanilla RAG |
+| `templates/manage_law.html` | Cột "Trạng thái" + nút Publish/Chuyển Pending |
+| `static/script.js` | Chặn câu hỏi trên 150 từ phía client |

@@ -27,6 +27,7 @@ from engine.rag_engine import (
     list_indexed_sources, delete_source, get_law_source_info, get_law_source_articles,
     list_scenario_sources, delete_scenario_source,
     list_dataset_sources, delete_dataset_source,
+    set_source_publish_status,
 )
 from database.database import (
     init_db, get_conn,
@@ -45,7 +46,10 @@ from database.database import (
 from engine.import_law_engine import run_import, get_job
 from engine.import_scenario_engine import run_import_scenario, get_scenario_job
 from engine.import_dataset_engine import run_import_dataset, get_dataset_job
-from engine.evaluate_engine import run_evaluation, get_eval_job, list_available_datasets, get_latest_eval_result
+from engine.evaluate_engine import (
+    run_evaluation, get_eval_job, list_available_datasets,
+    get_latest_eval_result, get_latest_vanilla_eval_result,
+)
 from engine.regression_test_engine import run_regression_tests, get_regression_job, get_latest_regression_results
 from engine.import_account_engine import run_import_accounts, build_template_bytes
 
@@ -188,6 +192,17 @@ async def session_info(request: Request):
 
 
 # ── Chat API ──────────────────────────────────────────────────────────────────
+# A question this long stops being a legal question and starts diluting both
+# retrieval signals: keyword overlap (each matched word is a smaller share of
+# the total) and embedding similarity (averaging many concepts drifts the
+# vector away from one specific legal topic) — see engine.rag_engine's
+# retrieve_docs(). 150 words comfortably covers even a detailed scenario
+# description (the TLDN_001 example is ~35-40 words) while blocking someone
+# pasting a full document into the box. Checked server-side (authoritative)
+# and mirrored client-side in static/script.js for instant feedback.
+MAX_QUESTION_WORDS = 150
+
+
 @app.post("/get")
 async def chatbot(request: Request):
     try:
@@ -200,6 +215,13 @@ async def chatbot(request: Request):
 
         if not user_input:
             return {"status": "error", "text": "⚠️ Bạn chưa nhập câu hỏi."}
+
+        word_count = len(user_input.split())
+        if word_count > MAX_QUESTION_WORDS:
+            return {
+                "status": "error",
+                "text": f"⚠️ Câu hỏi quá dài ({word_count} từ). Vui lòng rút gọn còn tối đa {MAX_QUESTION_WORDS} từ.",
+            }
 
         # Guests: single ephemeral chat, nothing written to chat.db. Turn
         # count lives only in the signed session cookie (same cap as
@@ -403,6 +425,35 @@ async def delete_law_source_route(request: Request):
             status_code=404,
         )
     return {"status": "ok", "deleted": deleted}
+
+
+@app.post("/set_source_publish_status")
+async def set_source_publish_status_route(request: Request):
+    # Admin-only, same as delete — publishing/unpublishing controls whether a
+    # source can affect real answers, at least as consequential as deleting
+    # it (see rag_engine.set_source_publish_status).
+    if not logged_in(request) or not is_admin(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+
+    data        = await request.json()
+    source_type = (data.get("source_type") or "").strip()
+    source_key  = (data.get("source_key") or "").strip()
+    status      = (data.get("status") or "").strip()
+
+    if source_type not in ("law", "dataset", "scenario"):
+        return JSONResponse({"status": "error", "message": "source_type không hợp lệ."}, status_code=400)
+    if status not in ("published", "pending"):
+        return JSONResponse({"status": "error", "message": "status không hợp lệ."}, status_code=400)
+    if not source_key:
+        return JSONResponse({"status": "error", "message": "Thiếu source_key"}, status_code=400)
+
+    updated = set_source_publish_status(source_type, source_key, status)
+    if updated == 0:
+        return JSONResponse(
+            {"status": "error", "message": f"Không tìm thấy nguồn '{source_key}'."},
+            status_code=404,
+        )
+    return {"status": "ok", "updated": updated}
 
 
 # Law only — Dataset/Scenario are test/enrichment data (auto-tagged secondary
@@ -804,14 +855,18 @@ async def evaluate_route(
     mode         = data.get("mode", "auto")
     split        = data.get("split", "demo")
     dataset_file = data.get("dataset_file") or None
+    pipeline     = data.get("pipeline", "custom")
 
     if mode not in ("auto", "llm"):
         mode = "auto"
     if split not in ("demo", "all", "test", "random"):
         split = "demo"
+    if pipeline not in ("custom", "vanilla"):
+        pipeline = "custom"
 
     job_id = str(uuid.uuid4())
-    background_tasks.add_task(run_evaluation, job_id=job_id, mode=mode, split=split, dataset_file=dataset_file)
+    background_tasks.add_task(run_evaluation, job_id=job_id, mode=mode, split=split,
+                              dataset_file=dataset_file, pipeline=pipeline)
     return {"status": "ok", "job_id": job_id}
 
 
@@ -822,10 +877,18 @@ async def evaluate_status_route(job_id: str):
 
 
 @app.get("/latest_eval_result")
-async def latest_eval_result_route(request: Request):
+async def latest_eval_result_route(request: Request, dataset_file: str = None):
     if not logged_in(request) or not is_teacher(request):
         return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
-    result = get_latest_eval_result()
+    result = get_latest_eval_result(dataset_file=dataset_file)
+    return result if result else {"status": "empty"}
+
+
+@app.get("/latest_vanilla_eval_result")
+async def latest_vanilla_eval_result_route(request: Request, dataset_file: str = None):
+    if not logged_in(request) or not is_teacher(request):
+        return JSONResponse({"status": "error", "message": "Unauthorized"}, status_code=403)
+    result = get_latest_vanilla_eval_result(dataset_file=dataset_file)
     return result if result else {"status": "empty"}
 
 

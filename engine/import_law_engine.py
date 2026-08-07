@@ -387,6 +387,14 @@ def run_import(job_id: str, file_path: str, so_ky_hieu: str,
                 "segment_index": i,
                 "import_source": "law",
                 "importer": importer,
+                # New imports start unpublished — RAG never uses a "pending"
+                # source to answer questions (see rag_engine.retrieve_docs'
+                # publish_status filter) until an admin explicitly publishes
+                # it via Manage Law (per user request 2026-08-08). Chunks
+                # indexed before this feature existed are backfilled to
+                # "published" instead (see backfill_publish_status_tags), so
+                # this only affects sources imported from here on.
+                "publish_status": "pending",
             }
             if m:
                 # Real article boundary — safe to tag with its true number.

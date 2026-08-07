@@ -185,6 +185,14 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 .btn-change-type { background: rgba(232,160,32,0.12); color: var(--gold); border-color: rgba(232,160,32,0.3); margin-left: 6px; }
 .btn-change-type:hover:not(:disabled) { background: rgba(232,160,32,0.22); }
 
+.pub-status-badge { padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.pub-status-published { background: rgba(29,155,108,0.15); color: var(--green); }
+.pub-status-pending    { background: rgba(232,160,32,0.15); color: var(--gold); }
+.btn-publish   { background: rgba(29,155,108,0.12); color: var(--green); border-color: rgba(29,155,108,0.3); margin-right: 6px; }
+.btn-publish:hover:not(:disabled)   { background: rgba(29,155,108,0.22); }
+.btn-unpublish { background: rgba(232,160,32,0.12); color: var(--gold); border-color: rgba(232,160,32,0.3); margin-right: 6px; }
+.btn-unpublish:hover:not(:disabled) { background: rgba(232,160,32,0.22); }
+
 /* ── Từ khóa tab ── */
 .kw-layout { display: flex; gap: 28px; align-items: flex-start; }
 .kw-main { flex: 1; min-width: 0; }
@@ -460,33 +468,33 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 
   <!-- ══ Văn bản pháp luật ══ -->
   <div class="tab-panel active" id="panelLaw">
-    <p class="tab-desc">Xoá một văn bản sẽ gỡ toàn bộ đoạn đã index khỏi ChromaDB và cập nhật lại danh sách nguồn được phép trích dẫn — không thể hoàn tác.</p>
+    <p class="tab-desc">Văn bản mới nhập ở trạng thái <strong>Pending</strong> — RAG chưa dùng để trả lời câu hỏi cho tới khi admin bấm <strong>Publish</strong>. Xoá một văn bản sẽ gỡ toàn bộ đoạn đã index khỏi ChromaDB và cập nhật lại danh sách nguồn được phép trích dẫn — không thể hoàn tác.</p>
     <div class="table-card">
       <table>
-        <thead><tr><th>Số ký hiệu</th><th>Người nhập</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
-        <tbody id="lawTbody"><tr><td colspan="4" class="empty-state">Đang tải…</td></tr></tbody>
+        <thead><tr><th>Số ký hiệu</th><th>Người nhập</th><th>Đoạn trong database</th><th>Trạng thái</th><th>Quản lý</th></tr></thead>
+        <tbody id="lawTbody"><tr><td colspan="5" class="empty-state">Đang tải…</td></tr></tbody>
       </table>
     </div>
   </div>
 
   <!-- ══ Dataset ══ -->
   <div class="tab-panel" id="panelDataset">
-    <p class="tab-desc">Các file dataset .xlsx đã tải lên. Các sheet <strong>KB_Articles / KB_Articles_Updated / Legal_Update_2025</strong> (nội dung tham khảo do giáo viên biên soạn) được nạp vào ChromaDB và có thể được dùng để trả lời câu hỏi thật. Các sheet <strong>Dataset_* / Demo_*</strong> (bộ câu hỏi kiểm thử) <strong>không bao giờ</strong> được nạp vào ChromaDB — chỉ dùng làm bộ dữ liệu Quick/Full Evaluation.</p>
+    <p class="tab-desc">Các file dataset .xlsx đã tải lên. Các sheet <strong>KB_Articles / KB_Articles_Updated / Legal_Update_2025</strong> (nội dung tham khảo do giáo viên biên soạn) được nạp vào ChromaDB ở trạng thái <strong>Pending</strong> — cần admin bấm <strong>Publish</strong> thì RAG mới dùng để trả lời câu hỏi thật. Các sheet <strong>Dataset_* / Demo_*</strong> (bộ câu hỏi kiểm thử) <strong>không bao giờ</strong> được nạp vào ChromaDB — chỉ dùng làm bộ dữ liệu Quick/Full Evaluation.</p>
     <div class="table-card">
       <table>
-        <thead><tr><th>Tên file</th><th>Người nhập</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
-        <tbody id="datasetTbody"><tr><td colspan="4" class="empty-state">Đang tải…</td></tr></tbody>
+        <thead><tr><th>Tên file</th><th>Người nhập</th><th>Đoạn trong database</th><th>Trạng thái</th><th>Quản lý</th></tr></thead>
+        <tbody id="datasetTbody"><tr><td colspan="5" class="empty-state">Đang tải…</td></tr></tbody>
       </table>
     </div>
   </div>
 
   <!-- ══ Tình huống ══ -->
   <div class="tab-panel" id="panelScenario">
-    <p class="tab-desc">Nhóm theo tên file .docx đã tải lên. Xoá sẽ gỡ toàn bộ tình huống của file đó khỏi ChromaDB.</p>
+    <p class="tab-desc">Nhóm theo tên file .docx đã tải lên. Tình huống mới nhập ở trạng thái <strong>Pending</strong> — cần admin bấm <strong>Publish</strong> thì RAG mới dùng để trả lời câu hỏi thật. Xoá sẽ gỡ toàn bộ tình huống của file đó khỏi ChromaDB.</p>
     <div class="table-card">
       <table>
-        <thead><tr><th>Tên file</th><th>Người nhập</th><th>Đoạn trong database</th><th>Quản lý</th></tr></thead>
-        <tbody id="scenarioTbody"><tr><td colspan="4" class="empty-state">Đang tải…</td></tr></tbody>
+        <thead><tr><th>Tên file</th><th>Người nhập</th><th>Đoạn trong database</th><th>Trạng thái</th><th>Quản lý</th></tr></thead>
+        <tbody id="scenarioTbody"><tr><td colspan="5" class="empty-state">Đang tải…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -701,20 +709,64 @@ function renderRows(tbodyId, items, nameKey, onDelete, opts) {
   const thirdColumn = opts.thirdColumn || (it => `${it.chunk_count} đoạn`);
   const tbody = document.getElementById(tbodyId);
   if (!Array.isArray(items) || items.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Chưa có dữ liệu nào.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Chưa có dữ liệu nào.</td></tr>';
     return;
   }
-  tbody.innerHTML = items.map((it, i) => `
+  tbody.innerHTML = items.map((it, i) => {
+    const isPublished = (it.publish_status || 'published') === 'published';
+    const statusBadge = isPublished
+      ? '<span class="pub-status-badge pub-status-published">Đã publish</span>'
+      : '<span class="pub-status-badge pub-status-pending">Pending</span>';
+    // Only admin can flip status — RAG-affecting, at least as consequential
+    // as deleting (see app.py's /set_source_publish_status, admin-only).
+    const toggleBtn = (IS_ADMIN && opts.sourceType)
+      ? (isPublished
+          ? `<button class="btn-action btn-unpublish" data-idx="${i}" onclick="togglePublishStatus(this, '${opts.sourceType}', '${isPublished}')">Chuyển Pending</button>`
+          : `<button class="btn-action btn-publish" data-idx="${i}" onclick="togglePublishStatus(this, '${opts.sourceType}', '${isPublished}')">Publish</button>`)
+      : '';
+    return `
     <tr>
       <td>${escapeHtml(it[nameKey])}</td>
       <td>${escapeHtml(it.importer || 'admin1')}</td>
       <td class="chunk-count">${thirdColumn(it)}</td>
+      <td>${statusBadge}</td>
       <td>
         ${opts.onView ? `<button class="btn-action btn-view" data-idx="${i}" onclick="${opts.onView}(this)">Xem thông tin</button>` : ''}
+        ${toggleBtn}
         ${IS_ADMIN ? `<button class="btn-action btn-delete" data-idx="${i}" onclick="${onDelete}(this)">Xoá</button>` : ''}
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   tbody.dataset.items = JSON.stringify(items.map(it => it[nameKey]));
+}
+
+async function togglePublishStatus(btn, sourceType, wasPublished) {
+  const tbody = btn.closest('tbody');
+  const items = JSON.parse(tbody.dataset.items || '[]');
+  const sourceKey = items[Number(btn.dataset.idx)];
+  if (!sourceKey) return;
+
+  const newStatus = wasPublished === 'true' ? 'pending' : 'published';
+  const confirmMsg = newStatus === 'pending'
+    ? `Chuyển "${sourceKey}" về Pending? RAG sẽ ngừng dùng nguồn này để trả lời câu hỏi ngay lập tức.`
+    : `Publish "${sourceKey}"? RAG sẽ bắt đầu dùng nguồn này để trả lời câu hỏi ngay lập tức.`;
+  if (!confirm(confirmMsg)) return;
+
+  btn.disabled = true;
+  try {
+    const res  = await fetch('/set_source_publish_status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_type: sourceType, source_key: sourceKey, status: newStatus })
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') throw new Error(data.message || 'Lỗi không xác định');
+    if (sourceType === 'law') loadLaw();
+    else if (sourceType === 'dataset') loadDataset();
+    else if (sourceType === 'scenario') loadScenario();
+  } catch (e) {
+    alert('❌ ' + e.message);
+    btn.disabled = false;
+  }
 }
 
 // ── Văn bản pháp luật ──
@@ -725,7 +777,7 @@ async function loadLaw() {
     const res = await fetch('/list_law_sources');
     if (res.status === 403) { window.location.href = '/'; return; }
     const data = await res.json();
-    renderRows('lawTbody', data, 'so_ky_hieu', 'deleteLaw', { onView: 'viewLawInfo' });
+    renderRows('lawTbody', data, 'so_ky_hieu', 'deleteLaw', { onView: 'viewLawInfo', sourceType: 'law' });
   } catch (e) {
     showLoadError('❌ Lỗi tải danh sách văn bản pháp luật: ' + e.message);
   }
@@ -760,7 +812,7 @@ async function loadDataset() {
     const res = await fetch('/list_dataset_sources');
     if (res.status === 403) { window.location.href = '/'; return; }
     const data = await res.json();
-    renderRows('datasetTbody', data, 'name', 'deleteDataset');
+    renderRows('datasetTbody', data, 'name', 'deleteDataset', { sourceType: 'dataset' });
   } catch (e) {
     showLoadError('❌ Lỗi tải danh sách dataset: ' + e.message);
   }
@@ -795,7 +847,7 @@ async function loadScenario() {
     const res = await fetch('/list_scenario_sources');
     if (res.status === 403) { window.location.href = '/'; return; }
     const data = await res.json();
-    renderRows('scenarioTbody', data, 'name', 'deleteScenario');
+    renderRows('scenarioTbody', data, 'name', 'deleteScenario', { sourceType: 'scenario' });
   } catch (e) {
     showLoadError('❌ Lỗi tải danh sách tình huống: ' + e.message);
   }

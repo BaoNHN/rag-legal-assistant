@@ -5,6 +5,11 @@ const chatList = document.getElementById("chat-list");
 const newChatBtn = document.querySelector(".new-chat");
 const mainContainer = document.getElementById("mainContainer");
 
+// Mirrors app.py's MAX_QUESTION_WORDS — checked here first for instant
+// feedback (no round-trip), but the server enforces its own copy too since
+// this is only a UX convenience, not the real gate.
+const MAX_QUESTION_WORDS = 150;
+
 let currentChatId = null;
 let chats = {};  // { chatId: [{role:'user', text:'hi'}, ...] }
 
@@ -212,6 +217,12 @@ chatInput.focus();
 sendButton.addEventListener('click', async () => {
     const message = chatInput.value.trim();
     if (!message) return;
+
+    const wordCount = message.split(/\s+/).filter(Boolean).length;
+    if (wordCount > MAX_QUESTION_WORDS) {
+        alert(`⚠️ Câu hỏi quá dài (${wordCount} từ). Vui lòng rút gọn còn tối đa ${MAX_QUESTION_WORDS} từ.`);
+        return;
+    }
 
     try {
         // Guests get one ephemeral, never-persisted chat (chat_id stays

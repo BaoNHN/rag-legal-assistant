@@ -198,6 +198,10 @@ def _build_kb_docs(sheet_df: pd.DataFrame, sheet_name: str, source_file: str, im
             "import_source":     "dataset",
             "source_file":       source_file,
             "importer":          importer,
+            # See import_law_engine.py's identical field for the full
+            # rationale — new imports start "pending", excluded from RAG
+            # until an admin publishes them.
+            "publish_status":    "pending",
         }
         entity_type = detect_entity_type(f"{topic} {content}")
         if entity_type:
@@ -265,6 +269,7 @@ def _build_update_docs(sheet_df: pd.DataFrame, source_file: str, importer: str) 
             "import_source":     "dataset",
             "source_file":       source_file,
             "importer":          importer,
+            "publish_status":    "pending",
         }
         entity_type = detect_entity_type(f"{topic} {content}")
         if entity_type:

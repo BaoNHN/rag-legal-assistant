@@ -1,0 +1,1617 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hướng Dẫn Demo — RAG Legal Assistant</title>
+<style>
+  :root {
+    --navy:   #0B1F3A;
+    --navy2:  #132843;
+    --navy3:  #1B335A;
+    --teal:   #0A8C7E;
+    --teal2:  #0DB4A2;
+    --gold:   #E8A020;
+    --white:  #F7F9FC;
+    --gray:   #8A97A8;
+    --border: #2A4066;
+    --green:  #1D9B6C;
+    --red:    #E5484D;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--navy);
+    color: var(--white);
+    font-family: 'Segoe UI', 'DM Sans', Arial, sans-serif;
+    line-height: 1.65;
+  }
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 28px 100px;
+  }
+  h1 {
+    font-size: 30px;
+    font-weight: 700;
+    border-bottom: 2px solid var(--teal2);
+    padding-bottom: 14px;
+    margin-bottom: 6px;
+  }
+  h1 + blockquote {
+    color: var(--gray);
+    font-style: italic;
+    margin: 0 0 30px;
+    border: none;
+    padding: 0;
+  }
+  h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--teal2);
+    margin-top: 48px;
+    padding: 10px 16px;
+    background: var(--navy2);
+    border-left: 4px solid var(--teal2);
+    border-radius: 6px;
+  }
+  h3 {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--gold);
+    margin-top: 30px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+  h4 { color: var(--white); font-size: 15px; margin-top: 20px; }
+  p, li { font-size: 14.5px; color: #E4E9F2; }
+  a { color: var(--teal2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    background: rgba(255,255,255,0.08);
+    color: #FFD98A;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Cascadia Code', Consolas, monospace;
+    font-size: 13px;
+  }
+  pre {
+    background: #081524;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    overflow-x: auto;
+  }
+  pre code { background: none; color: #C9D6E8; padding: 0; }
+  blockquote {
+    border-left: 4px solid var(--gold);
+    background: rgba(232,160,32,0.08);
+    margin: 16px 0;
+    padding: 10px 18px;
+    border-radius: 0 6px 6px 0;
+    color: #F0D9A8;
+  }
+  blockquote p { margin: 6px 0; color: inherit; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 13.5px;
+    overflow-x: auto;
+    display: block;
+  }
+  table thead { display: table; width: 100%; table-layout: fixed; }
+  table tbody { display: table; width: 100%; table-layout: fixed; }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 9px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--navy3); color: var(--teal2); font-weight: 600; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+  img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); margin: 12px 0; }
+  strong { color: #FFFFFF; }
+
+  /* Mục Lục — rendered from the doc's own list right after H1, styled as a card */
+  h1 ~ ul:first-of-type {
+    background: var(--navy2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px 20px 40px;
+    list-style: none;
+  }
+  h1 ~ ul:first-of-type li { margin: 6px 0; }
+  h1 ~ ul:first-of-type::before {
+    content: "Mục Lục";
+    display: block;
+    font-weight: 700;
+    color: var(--gold);
+    font-size: 15px;
+    margin: -4px 0 10px -16px;
+    letter-spacing: 0.03em;
+  }
+
+  .top-badge {
+    display: inline-block;
+    background: rgba(13,180,162,0.15);
+    color: var(--teal2);
+    border: 1px solid rgba(13,180,162,0.35);
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 18px;
+  }
+
+  #back-to-top {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--teal2);
+    color: var(--navy);
+    border: none;
+    border-radius: 999px;
+    width: 46px;
+    height: 46px;
+    font-size: 20px;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s;
+  }
+  #back-to-top.show { opacity: 1; pointer-events: auto; }
+
+  @media (max-width: 640px) {
+    .page { padding: 24px 16px 80px; }
+    h1 { font-size: 24px; }
+    h2 { font-size: 19px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+<span class="top-badge">📄 Tự động render từ HUONG_DAN_DEMO.md — sửa file .md rồi chạy lại build_huong_dan_html.py</span>
+<h1 id="hướng-dẫn-demo--rag-legal-assistant">Hướng Dẫn Demo — RAG Legal Assistant</h1>
+<blockquote>
+<p>Hệ thống trợ lý pháp lý thông minh sử dụng kỹ thuật <strong>RAG (Retrieval-Augmented Generation)</strong>, hỗ trợ tra cứu văn bản luật bằng ngôn ngữ tự nhiên.</p>
+</blockquote>
+<hr />
+<h2 id="mục-lục">Mục Lục</h2>
+<ol>
+<li><a href="#1-tổng-quan-hệ-thống">Tổng Quan Hệ Thống</a></li>
+<li><a href="#2-yêu-cầu--cài-đặt">Yêu Cầu &amp; Cài Đặt</a></li>
+<li><a href="#3-khởi-động-ứng-dụng">Khởi Động Ứng Dụng</a></li>
+<li><a href="#4-vai-trò--tài-khoản">Vai Trò &amp; Tài Khoản</a></li>
+<li><a href="#5-demo-hỏi-đáp-pháp-lý--vai-trò-học-sinh">Demo Hỏi Đáp Pháp Lý — Vai Trò Học Sinh</a></li>
+<li><a href="#6-demo-nhập-văn-bản-luật-pdf--docx--vai-trò-giáo-viên">Demo Nhập Văn Bản Luật (PDF / DOCX) — Vai Trò Giáo Viên</a></li>
+<li><a href="#7-demo-nhập-văn-bản-tình-huống-docx--vai-trò-giáo-viên">Demo Nhập Văn Bản Tình Huống (DOCX) — Vai Trò Giáo Viên</a></li>
+<li><a href="#8-demo-import-dataset-excel--vai-trò-giáo-viên">Demo Import Dataset Excel — Vai Trò Giáo Viên</a></li>
+<li><a href="#9-demo-đánh-giá-hệ-thống-rag--vai-trò-giáo-viên">Demo Đánh Giá Hệ Thống RAG — Vai Trò Giáo Viên</a></li>
+<li><a href="#10-demo-quản-lý-tài-khoản--vai-trò-admin">Demo Quản Lý Tài Khoản — Vai Trò Admin</a></li>
+<li><a href="#11-demo-quản-lý-văn-bản-manage-law--vai-trò-giáo-viên--admin">Demo Quản Lý Văn Bản (Manage Law) + Từ Khóa + Kiểm Thử Hồi Quy — Vai Trò Giáo Viên + Admin</a></li>
+<li><a href="#12-câu-hỏi-demo-gợi-ý">Câu Hỏi Demo Gợi Ý</a></li>
+<li><a href="#13-kiến-trúc-kỹ-thuật">Kiến Trúc Kỹ Thuật</a></li>
+<li><a href="#14-xử-lý-sự-cố">Xử Lý Sự Cố</a></li>
+<li><a href="#15-cập-nhật-mới-nhất-2026-08-08">Cập Nhật Mới Nhất (2026-08-08)</a></li>
+</ol>
+<hr />
+<h2 id="1-tổng-quan-hệ-thống">1. Tổng Quan Hệ Thống</h2>
+<h3 id="stack-công-nghệ">Stack Công Nghệ</h3>
+<table>
+<thead>
+<tr>
+<th>Thành phần</th>
+<th>Công nghệ</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Backend</td>
+<td>FastAPI (Python 3.10+), chạy bằng Uvicorn</td>
+</tr>
+<tr>
+<td>Vector Database</td>
+<td>ChromaDB</td>
+</tr>
+<tr>
+<td>Embedding Model</td>
+<td><code>BAAI/bge-m3</code> (HuggingFace, đa ngôn ngữ — đổi từ <code>bge-small-en-v1.5</code> ngày 2026-07-25, xem mục 14)</td>
+</tr>
+<tr>
+<td>LLM</td>
+<td>Groq — <code>llama-3.1-8b-instant</code></td>
+</tr>
+<tr>
+<td>OCR tiếng Việt</td>
+<td>VietOCR (<code>vgg_transformer</code>)</td>
+</tr>
+<tr>
+<td>Trích xuất PDF/DOCX</td>
+<td>pypdf (text số) + pdf2image/Poppler (OCR scan) + python-docx</td>
+</tr>
+<tr>
+<td>Nhận diện dòng văn bản</td>
+<td>OpenCV</td>
+</tr>
+<tr>
+<td>Xử lý Excel</td>
+<td>pandas + openpyxl</td>
+</tr>
+<tr>
+<td>Database ứng dụng</td>
+<td>SQLite (<code>chat.db</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="pipeline-rag-khi-học-sinhgiáo-viên-đặt-câu-hỏi">Pipeline RAG (khi học sinh/giáo viên đặt câu hỏi)</h3>
+<pre><code>[1] Câu hỏi người dùng
+       ↓
+[2] Kiểm tra ngoài phạm vi (ly hôn, hình sự, đất đai, thuế…) → từ chối sớm nếu không thuộc Luật Doanh nghiệp
+       ↓
+[3] Kiểm tra câu hỏi &quot;meta&quot; về hệ thống (VD: &quot;database đang lưu bao nhiêu điều luật?&quot;) → trả lời trực tiếp, bỏ qua RAG
+       ↓
+[4] Trích xuất chủ đề (topic extraction)
+     → Nếu nhận ra chủ đề: bỏ qua bước viết lại → tiết kiệm 1 lần gọi API
+       ↓
+[5] Viết lại câu hỏi (query rewrite) — chỉ khi không trích được chủ đề
+       ↓
+[6] Tìm kiếm ngữ nghĩa trong ChromaDB (topic-aware retrieval)
+     → Ưu tiên khớp metadata theo chủ đề, fallback sang semantic search có ngưỡng độ tương đồng
+       ↓
+[7] Xếp hạng lại tài liệu (rerank)
+     → Tính điểm từ: từ khóa + cụm từ + số điều luật + nguồn KB + từ khóa admin
+       gắn cho nguồn (mục 13.8, thêm 2026-07-28)
+       ↓
+[8] Phân loại câu hỏi (definition / condition / procedure / general)
+       ↓
+[9] Xây dựng prompt có căn cứ pháp lý + gọi Groq LLM (có retry tự động khi rate-limit)
+       ↓
+[10] Làm sạch câu trả lời (loại bỏ chào hỏi, dòng trùng lặp)
+       ↓
+[11] Gắn trích dẫn điều luật chính + nguồn tham khảo phụ (📖/📎) + đường dẫn vbpl.vn
+        → Trích dẫn (so_ky_hieu) chỉ được in ra nếu đang thực sự có mặt trong ChromaDB
+          lúc đó (whitelist CITATION_SOURCE, xem mục 13.4) — chống trích dẫn &quot;ma&quot; từ
+          văn bản đã bị xoá hoặc chưa từng được import
+</code></pre>
+<p>Hệ thống nạp dữ liệu vào ChromaDB qua <strong>2 luồng import</strong> độc lập, cùng dùng chung một vector store: <strong>Văn bản luật</strong> (mục 6), <strong>Văn bản tình huống</strong> (mục 7). <em>(Cập nhật 2026-07-28: bỏ luồng thứ 3 — Dataset Excel, mục 8 — khỏi ChromaDB do rủi ro data leakage thật đã xác minh; giờ Dataset chỉ còn là file kiểm thử trên đĩa, xem mục 14.)</em> Admin quản lý cả 3 loại (2 luồng nạp ChromaDB + Dataset trên đĩa) qua trang <strong>Manage Law</strong> (mục 11).</p>
+<hr />
+<h2 id="2-yêu-cầu--cài-đặt">2. Yêu Cầu &amp; Cài Đặt</h2>
+<h3 id="21-phần-mềm-cần-có">2.1 Phần Mềm Cần Có</h3>
+<ul>
+<li><strong>Python 3.10+</strong></li>
+<li><strong>Poppler</strong> — đã có sẵn trong thư mục <code>poppler/</code> của dự án (dùng khi OCR PDF scan)</li>
+<li><strong>Groq API key</strong> — đăng ký miễn phí tại https://console.groq.com</li>
+</ul>
+<h3 id="22-cài-đặt-thư-viện">2.2 Cài Đặt Thư Viện</h3>
+<pre><code class="language-bash">pip install -r requirements.txt
+</code></pre>
+<h3 id="23-cấu-hình-api-key">2.3 Cấu Hình API Key</h3>
+<p>Tạo file <code>groqkey.txt</code> tại thư mục gốc dự án, dán API key vào:</p>
+<pre><code>gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+</code></pre>
+<p>Có thể dán <strong>nhiều key</strong>, phân tách bằng <code>;</code>, để hệ thống tự xoay vòng khi một key bị rate-limit (xem <code>engine/groq_keys.py</code>):</p>
+<pre><code>gsk_key_thu_nhat;gsk_key_thu_hai;gsk_key_thu_ba
+</code></pre>
+<h3 id="24-kiểm-tra-nhanh">2.4 Kiểm Tra Nhanh</h3>
+<pre><code class="language-bash"># Xác nhận Python đúng phiên bản
+python --version
+
+# Xác nhận Groq key hợp lệ
+python -c &quot;print(open('groqkey.txt').read().strip()[:8] + '...')&quot;
+</code></pre>
+<hr />
+<h2 id="3-khởi-động-ứng-dụng">3. Khởi Động Ứng Dụng</h2>
+<pre><code class="language-bash">python app.py
+</code></pre>
+<p>Nội bộ <code>app.py</code> tự gọi Uvicorn (<code>uvicorn.run("app:app", host="127.0.0.1", port=8000)</code>), nên không cần chạy lệnh <code>uvicorn</code> riêng. Terminal hiển thị:</p>
+<pre><code>INFO:     Uvicorn running on http://127.0.0.1:8000
+</code></pre>
+<p>Mở trình duyệt và truy cập: <strong>http://127.0.0.1:8000</strong></p>
+<blockquote>
+<p><strong>Lần đầu khởi động:</strong> Hệ thống tự động tạo file <code>chat.db</code> và seed 3 tài khoản mặc định (học sinh, giáo viên, admin). ChromaDB cũng sẽ tải embedding model từ HuggingFace (cần kết nối Internet lần đầu — <code>BAAI/bge-m3</code> khoảng 2GB, chỉ tải một lần rồi cache). <code>engine/rag_engine.py</code> còn tự chạy 3 tác vụ bảo trì lúc khởi động: làm mới whitelist trích dẫn (<code>refresh_citation_sources</code>), gắn nhãn nguồn gốc cho các đoạn dữ liệu cũ chưa được đánh dấu (<code>backfill_import_source_tags</code>, xem mục 13.4), và gắn nhãn người nhập mặc định <code>"admin1"</code> cho các đoạn nhập trước khi có tính năng theo dõi người nhập (<code>backfill_importer_tags</code>) — cả ba đều an toàn khi chạy lại nhiều lần.</p>
+</blockquote>
+<hr />
+<h2 id="4-vai-trò--tài-khoản">4. Vai Trò &amp; Tài Khoản</h2>
+<p>Hệ thống có <strong>3 vai trò</strong>, phân biệt bằng cột <code>role</code> trong bảng <code>users</code> (0 = Student, 1 = Teacher, 2 = Admin). Admin kế thừa toàn bộ quyền của Teacher.</p>
+<h3 id="tài-khoản-mặc-định">Tài Khoản Mặc Định</h3>
+<table>
+<thead>
+<tr>
+<th>Vai trò</th>
+<th>Tên đăng nhập</th>
+<th>Mật khẩu</th>
+<th>Quyền</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Học sinh</td>
+<td><code>testStudent1</code></td>
+<td><code>123456P@ss</code></td>
+<td>Hỏi đáp RAG</td>
+</tr>
+<tr>
+<td>Giáo viên</td>
+<td><code>teacher1</code></td>
+<td><code>Teacher@123</code></td>
+<td>Hỏi đáp + Import văn bản luật/tình huống/dataset + Đánh giá RAG</td>
+</tr>
+<tr>
+<td>Admin</td>
+<td><code>admin1</code></td>
+<td><code>Admin@123</code></td>
+<td>Toàn bộ quyền Giáo viên + Quản lý tài khoản + Quản lý văn bản (xoá dữ liệu đã import)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Các tài khoản mặc định chỉ được tạo <strong>một lần</strong>, khi bảng <code>users</code> hoàn toàn trống lúc khởi động. Nếu bảng đã có dữ liệu, cần dùng chức năng <strong>Import tài khoản</strong> hoặc thêm thủ công (mục 10) để có tài khoản admin.</p>
+</blockquote>
+<h3 id="các-bước-demo-đăng-nhập">Các Bước Demo Đăng Nhập</h3>
+<ol>
+<li>Truy cập <code>http://127.0.0.1:8000</code></li>
+<li>Nhập tên đăng nhập và mật khẩu</li>
+<li>Nhấn <strong>Đăng nhập</strong></li>
+<li>Hệ thống tự động điều hướng theo vai trò:<br />
+   - <strong>Học sinh</strong> → giao diện chat hỏi đáp<br />
+   - <strong>Giáo viên</strong> → giao diện chat + nút <strong>"Import Law"</strong> trên sidebar + badge <strong>"Giảng viên"</strong><br />
+   - <strong>Admin</strong> → giao diện chat + nút <strong>"Import Law"</strong> + nút <strong>"Manage Account"</strong> + nút <strong>"Manage Law"</strong> + badge <strong>"Quản trị viên"</strong></li>
+<li>Trên trang đăng nhập có link <strong>"Đổi mật khẩu"</strong> để tự đổi mật khẩu (yêu cầu tối thiểu 8 ký tự, có chữ hoa, chữ thường, số và ký tự đặc biệt)</li>
+</ol>
+<p><img alt="Trang đăng nhập" src="login.png" /></p>
+<hr />
+<h2 id="5-demo-hỏi-đáp-pháp-lý--vai-trò-học-sinh">5. Demo Hỏi Đáp Pháp Lý — Vai Trò Học Sinh</h2>
+<h3 id="bước-1-tạo-cuộc-trò-chuyện-mới">Bước 1: Tạo Cuộc Trò Chuyện Mới</h3>
+<ol>
+<li>Đăng nhập bằng tài khoản học sinh (<code>testStudent1</code>)</li>
+<li>Nhấn nút <strong>"+ New Chat"</strong> ở thanh bên trái</li>
+<li>Một cuộc trò chuyện mới được tạo, sẵn sàng nhận câu hỏi</li>
+</ol>
+<h3 id="bước-2-đặt-câu-hỏi">Bước 2: Đặt Câu Hỏi</h3>
+<ul>
+<li>Gõ câu hỏi vào ô nhập liệu ở cuối trang</li>
+<li>Nhấn <strong>Enter</strong> hoặc nút gửi</li>
+<li>Hệ thống xử lý theo pipeline ở mục 1, sau đó hiển thị:</li>
+<li>Câu trả lời phù hợp với loại câu hỏi (định nghĩa / điều kiện / thủ tục)</li>
+<li><strong>📖 Nguồn chính:</strong> trích dẫn điều luật cụ thể</li>
+<li><strong>📎 Nguồn tham khảo:</strong> tối đa 3 điều luật liên quan khác (nếu có)</li>
+<li><strong>🔗 Link:</strong> đường dẫn vbpl.vn (nếu có)</li>
+</ul>
+<p><img alt="Giao diện chat học sinh" src="chat_index_student.png" /></p>
+<h3 id="bước-3-quản-lý-cuộc-trò-chuyện">Bước 3: Quản Lý Cuộc Trò Chuyện</h3>
+<table>
+<thead>
+<tr>
+<th>Thao tác</th>
+<th>Cách thực hiện</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Đổi tên chat</td>
+<td>Nhấp đúp vào tiêu đề chat ở sidebar</td>
+</tr>
+<tr>
+<td>Xóa chat</td>
+<td>Nhấn icon thùng rác bên cạnh tên chat</td>
+</tr>
+<tr>
+<td>Chuyển chat</td>
+<td>Nhấn vào tên chat khác trong sidebar</td>
+</tr>
+<tr>
+<td>Xem lại lịch sử</td>
+<td>Nhấn vào chat có sẵn — tin nhắn được load từ SQLite</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Chat của học sinh và giáo viên tách biệt hoàn toàn (cột <code>role</code> trong bảng <code>chats</code>), kể cả khi cùng một <code>user_id</code>.</p>
+<p><strong>Mới 2026-08-08:</strong> câu hỏi giới hạn tối đa <strong>150 từ</strong> — nhập quá sẽ bị chặn ngay (không gọi server) kèm cảnh báo "⚠️ Câu hỏi quá dài (N từ). Vui lòng rút gọn còn tối đa 150 từ." Xem chi tiết ở mục 15.5.</p>
+</blockquote>
+<hr />
+<h2 id="6-demo-nhập-văn-bản-luật-pdf--docx--vai-trò-giáo-viên">6. Demo Nhập Văn Bản Luật (PDF / DOCX) — Vai Trò Giáo Viên</h2>
+<p>Tính năng này cho phép giáo viên (hoặc admin) tải lên file <strong>PDF hoặc DOCX</strong>. Hệ thống tự động trích xuất văn bản (hoặc OCR nếu là bản scan), phân đoạn theo điều khoản và lập chỉ mục vào ChromaDB.</p>
+<h3 id="bước-1-truy-cập-trang-import">Bước 1: Truy Cập Trang Import</h3>
+<ol>
+<li>Đăng nhập bằng tài khoản giáo viên (<code>teacher1</code>) hoặc admin</li>
+<li>Sidebar hiển thị nút <strong>"Import Law"</strong> và badge vai trò ở header</li>
+<li>Nhấn nút <strong>"Import Law"</strong> — trang <code>/import</code> mở ra, tab mặc định <strong>"📄 Upload PDF / DOCX"</strong></li>
+</ol>
+<p><img alt="Giao diện giáo viên — sidebar có nút Import Law và chat &quot;Import new law&quot;" src="chat_index_teacher.png" /></p>
+<h3 id="bước-2-điền-thông-tin-và-upload">Bước 2: Điền Thông Tin và Upload</h3>
+<table>
+<thead>
+<tr>
+<th>Trường</th>
+<th>Ví dụ</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Số ký hiệu</td>
+<td><code>59/2020/QH14</code></td>
+<td>Số hiệu chính thức của văn bản — dùng để chống import trùng</td>
+</tr>
+<tr>
+<td>Loại văn bản</td>
+<td><code>Luật Doanh nghiệp</code></td>
+<td>Tên/loại văn bản pháp luật</td>
+</tr>
+<tr>
+<td>Nguồn thu thập</td>
+<td><code>vbpl.vn</code></td>
+<td>Nguồn gốc tài liệu</td>
+</tr>
+<tr>
+<td><strong>Từ khóa chính</strong> <em>(bắt buộc, thêm 2026-07-28)</em></td>
+<td><code>hộ kinh doanh</code></td>
+<td>Chọn ≥1 từ khóa có sẵn trong danh sách (gõ vào ô tìm kiếm phía trên select để lọc nhanh) — quyết định độ ưu tiên <strong>cao</strong> khi chấm điểm nguồn lúc trả lời (mục 13.8)</td>
+</tr>
+<tr>
+<td>Từ khóa phụ <em>(tuỳ chọn, thêm 2026-07-28)</em></td>
+<td><code>đăng ký doanh nghiệp</code></td>
+<td>Giống từ khóa chính nhưng độ ưu tiên <strong>thấp hơn</strong>; có thể để trống</td>
+</tr>
+<tr>
+<td>File</td>
+<td><em>(chọn file .pdf hoặc .docx)</em></td>
+<td>Hỗ trợ PDF (scan hoặc số) và DOCX</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Không thấy từ khóa mình cần trong danh sách? Admin cần vào <strong>Manage Law → tab "Từ khóa"</strong> (mục 11, bước 4) thêm từ khóa mới trước — trang Import không tự tạo từ khóa mới, chỉ chọn từ danh sách đã có sẵn.</p>
+</blockquote>
+<p>Nhấn <strong>"🚀 Tải lên &amp; Xử lý AI"</strong> để bắt đầu.</p>
+<p><img alt="Trang import PDF" src="import_pdf.png" /></p>
+<h3 id="bước-3-quy-trình-xử-lý-nền">Bước 3: Quy Trình Xử Lý Nền</h3>
+<pre><code>1. Nhận file → lưu tạm thời vào uploads_tmp/
+2. Nếu DOCX: trích xuất văn bản trực tiếp (python-docx, gồm cả bảng)
+3. Nếu PDF:
+   a. Thử trích xuất text trực tiếp bằng pypdf (PDF văn bản số)
+   b. Nếu quá ít ký tự (&lt; 150 ký tự/trang trung bình) → coi là bản scan, chuyển sang OCR:
+      - Tải mô hình VietOCR (vgg_transformer), tự phát hiện CPU/GPU
+      - Chuyển PDF → ảnh (DPI 250, từng batch 5 trang)
+      - Tiền xử lý ảnh (tăng độ tương phản, làm nét)
+      - Nhận dạng dòng văn bản bằng OpenCV
+      - OCR từng dòng bằng VietOCR (beam search)
+4. Phân đoạn theo &quot;Điều X.&quot; trong văn bản
+5. Tạo vector embedding và thêm vào ChromaDB (bỏ qua nếu Số ký hiệu đã tồn tại)
+   — mỗi đoạn được gắn nhãn import_source=&quot;law&quot; để trang Manage Law (mục 11)
+     nhận diện đúng nguồn gốc
+6. Gắn Từ khóa chính/phụ đã chọn ở Bước 2 vào Số ký hiệu này (bảng source_keyword,
+   mục 13.8) — luôn ghi lại kể cả khi toàn bộ đoạn bị bỏ qua vì trùng, để hỗ trợ
+   trường hợp import lại chỉ để sửa từ khóa
+7. Tạo/cập nhật chat &quot;Import new law&quot; với thông báo kết quả
+</code></pre>
+<h3 id="bước-4-theo-dõi-tiến-trình">Bước 4: Theo Dõi Tiến Trình</h3>
+<ul>
+<li>Giao diện hiển thị <strong>thanh tiến trình realtime</strong> và trạng thái từng bước</li>
+<li>Trạng thái: <code>running</code> → <code>done</code> / <code>failed</code></li>
+<li>Khi hoàn tất, kết quả xuất hiện trong chat <strong>"Import new law"</strong> ở sidebar</li>
+<li>Thành công: <code>✅ Hoàn tất! Đã thêm X đoạn vào ChromaDB (bỏ qua Y đoạn trùng lặp).</code></li>
+<li>Thất bại: <code>❌ Lỗi: &lt;chi tiết&gt;</code></li>
+</ul>
+<p><img alt="Kết quả import trong chat &quot;Import new law&quot;" src="import_result.png" /></p>
+<h3 id="lưu-ý-quan-trọng">Lưu Ý Quan Trọng</h3>
+<ul>
+<li>Chỉ chấp nhận định dạng <strong>PDF</strong> hoặc <strong>DOCX</strong></li>
+<li>Văn bản có <strong>số ký hiệu trùng</strong> sẽ bị bỏ qua tự động (không import lại)</li>
+<li>PDF văn bản số (có thể chọn/copy chữ) được trích xuất trực tiếp — <strong>nhanh, không cần OCR</strong></li>
+<li>OCR chỉ chạy khi phát hiện PDF là bản scan, mặc định trên <strong>CPU</strong> — file 50 trang có thể mất 10–30 phút</li>
+<li>Nếu hệ thống <strong>không nhận diện được ranh giới "Điều X."</strong> trong văn bản (văn bản không có tiêu đề điều rõ ràng), quy trình sẽ dùng cắt đoạn dự phòng (3000 ký tự/đoạn) và <strong>báo cảnh báo rõ ràng</strong> trong tiến trình + trong chat "Import new law" — các đoạn này sẽ không có trích dẫn số Điều (thay vì âm thầm gán số Điều sai như trước)</li>
+<li>Một Điều đơn lẻ dài hơn 3000 ký tự (VD Điều 74, ~13.400 ký tự) được <strong>chia nhỏ tiếp</strong> thành các đoạn 2000–3000 ký tự, overlap 200–300 ký tự (<code>_split_long_segment</code> trong <code>import_law_engine.py</code>, thêm ngày 2026-07-25) — mỗi đoạn con vẫn giữ đúng <code>article_number</code>/<code>article_reference</code> của Điều gốc nên trích dẫn không bị ảnh hưởng. Khác với cắt đoạn dự phòng ở trên, cách này <strong>không</strong> gộp nội dung của nhiều Điều khác nhau vào cùng một đoạn.</li>
+<li>Để dùng <strong>GPU</strong> (nhanh hơn đáng kể), tạo file <code>.device_config</code> tại thư mục gốc:<br />
+<code>DEVICE=cuda</code></li>
+<li>Muốn xoá một văn bản đã import (VD nhập nhầm số ký hiệu)? Dùng trang <strong>Manage Law</strong> (mục 11, chỉ Admin) thay vì import chồng lên.</li>
+</ul>
+<hr />
+<h2 id="7-demo-nhập-văn-bản-tình-huống-docx--vai-trò-giáo-viên">7. Demo Nhập Văn Bản Tình Huống (DOCX) — Vai Trò Giáo Viên</h2>
+<p>Ngoài văn bản luật gốc, giáo viên có thể nạp một <strong>bộ tình huống pháp lý mẫu</strong> (dạng phân tích IRAC — Issue/Rule/Application/Conclusion) để làm phong phú câu trả lời cho các câu hỏi tình huống thực tế.</p>
+<h3 id="bước-1-chuyển-sang-tab-tình-huống">Bước 1: Chuyển Sang Tab Tình Huống</h3>
+<p>Tại trang <code>/import</code>, nhấn tab <strong>"📚 Tình huống"</strong>.</p>
+<h3 id="bước-2-chuẩn-bị-file--upload">Bước 2: Chuẩn Bị File &amp; Upload</h3>
+<ul>
+<li>File <code>.docx</code> phải theo đúng cấu trúc cố định — mỗi tình huống là một mục <strong>Heading 1</strong> dạng <code>Tình huống NN. &lt;Chủ đề&gt;</code>, gồm các mục con:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Mục</th>
+<th>Nội dung</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dòng đầu (sau Heading 1)</td>
+<td><code>Mã: &lt;mã tình huống&gt;   Độ khó: &lt;Dễ/Trung bình/Khó&gt;</code></td>
+</tr>
+<tr>
+<td><code>1. Đề bài</code></td>
+<td><code>Tình huống: …</code> và <code>Câu hỏi: …</code></td>
+</tr>
+<tr>
+<td><code>2. Câu hỏi dẫn dắt xác định vấn đề pháp lý</code></td>
+<td>Mỗi câu hỏi dẫn dắt một dòng riêng</td>
+</tr>
+<tr>
+<td><code>3. Đáp án theo phương pháp IRAC</code></td>
+<td><code>I – Issue:</code>, <code>R – Rule:</code>, <code>A – Application:</code>, <code>C – Conclusion:</code></td>
+</tr>
+<tr>
+<td><code>4. Căn cứ pháp lý</code></td>
+<td>Mỗi căn cứ pháp lý một dòng riêng (có thể trích nhiều điều/nhiều văn bản khác nhau)</td>
+</tr>
+<tr>
+<td><code>5. Dữ liệu hỗ trợ truy xuất chatbot</code></td>
+<td><code>Từ khóa: k1; k2; k3</code> và <code>Câu hỏi tương đương: q1 \| q2</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Tải file mẫu qua link <strong>"⬇️ Tải example_scenario.docx"</strong> ở panel bên phải để xem đúng cấu trúc (có sẵn 2 tình huống ví dụ minh hoạ).</li>
+<li>Chọn/kéo thả file <code>.docx</code> đã điền, nhấn <strong>"📥 Tải lên &amp; Xử lý"</strong>.</li>
+</ul>
+<h3 id="bước-3-quy-trình-xử-lý-nền">Bước 3: Quy Trình Xử Lý Nền</h3>
+<pre><code>1. Đọc toàn bộ paragraph trong file .docx, tách theo từng khối &quot;Tình huống NN.&quot;
+2. Với mỗi tình huống: parse Mã/Độ khó, Đề bài, câu hỏi dẫn dắt, 4 thành phần IRAC,
+   căn cứ pháp lý, từ khóa, câu hỏi tương đương
+3. Gộp thành một đoạn văn bản có cấu trúc cho mỗi tình huống, gắn nhãn
+   doc_type=&quot;scenario_qa&quot;, import_source=&quot;scenario&quot;, nguon_thu_thap=&lt;tên file gốc&gt;
+4. Tạo vector embedding, thêm vào ChromaDB — bỏ qua nếu &quot;Mã&quot; tình huống đã tồn tại
+   (import lại cùng file sẽ không tạo trùng)
+5. *(thêm 2026-07-28)* Tự động gom **mọi cụm từ khóa duy nhất** trong mục &quot;Từ khóa:&quot;
+   (mục 5. Dữ liệu hỗ trợ truy xuất chatbot) của tất cả tình huống trong file, tạo
+   mới trong bảng `keyword` nếu chưa có, rồi gắn làm **Từ khóa phụ** cho cả file —
+   không có ô nhập tay, không có Từ khóa chính (Tình huống là dữ liệu làm giàu ngữ
+   cảnh, không phải nguồn chính thức nên không được buff điểm cao như Văn bản pháp
+   luật, xem mục 13.8)
+6. Tạo/cập nhật chat &quot;Nhập văn bản tình huống&quot; với thông báo kết quả
+</code></pre>
+<h3 id="lưu-ý-quan-trọng">Lưu Ý Quan Trọng</h3>
+<ul>
+<li><strong>Không</strong> gán số ký hiệu (<code>so_ky_hieu</code>) cho các đoạn tình huống — một tình huống có thể trích nhiều điều luật từ nhiều văn bản khác nhau cùng lúc (VD vừa Luật Doanh nghiệp vừa Nghị định 168/2025/NĐ-CP), nên hệ thống không tự gán một mã văn bản duy nhất để tránh trích dẫn sai nguồn. Khi trả lời, các đoạn này vẫn được dùng để truy xuất ngữ nghĩa bình thường, chỉ không tự sinh dòng "📖 Nguồn chính" theo số ký hiệu cho riêng chúng.</li>
+<li>Xoá một bộ tình huống đã import: dùng trang <strong>Manage Law</strong> (mục 11) → tab <strong>Tình huống</strong>, xoá theo tên file gốc.</li>
+<li><em>(thêm 2026-07-28)</em> Trang Manage Law <strong>không</strong> có nút "Xem thông tin" cho tab Tình huống (và Dataset) — từ khóa của 2 loại này chỉ tự sinh lúc import, không xem/sửa tay được qua giao diện. Muốn đổi, phải xoá rồi import lại.</li>
+<li><em>(mới 2026-08-08)</em> Nếu người dùng gõ <strong>gần như nguyên văn</strong> dòng <code>Tình huống:</code>, dòng <code>Câu hỏi:</code>, hoặc bất kỳ <code>Câu hỏi tương đương:</code> nào của một tình huống đã import, hệ thống <strong>nhận diện đúng ngay tình huống đó</strong>, bỏ qua toàn bộ bước tính điểm truy xuất/rerank — xem chi tiết mục 15.4.</li>
+</ul>
+<hr />
+<h2 id="8-demo-import-dataset-excel--vai-trò-giáo-viên">8. Demo Import Dataset Excel — Vai Trò Giáo Viên</h2>
+<blockquote>
+<p><strong>Thay đổi 2026-07-28 (mô hình cuối cùng — hybrid):</strong> Trước đây phát hiện rủi ro data leakage thật: đúng 200 dòng câu hỏi–đáp án của sheet <code>Dataset_200</code> (bộ câu hỏi dùng để chạy Full Evaluation, mục 9) bị lẫn vào ChromaDB dưới dạng đoạn chứa nguyên văn "Câu hỏi: ... / Trả lời: ...", khiến hệ thống có thể vô tình truy xuất trúng đáp án mẫu khi tự chấm điểm chính mình (xem mục 13.9/14). Bản vá đầu tiên (cùng ngày) xoá <strong>toàn bộ</strong> nội dung dataset khỏi ChromaDB — nhưng việc này vô tình xoá luôn <code>KB_Articles</code>/<code>KB_Articles_Updated</code>/<code>Legal_Update_2025</code>, là nội dung <strong>tham khảo do giáo viên biên soạn thủ công</strong> (không phải câu hỏi kiểm thử) và từng thực sự giúp trả lời đúng nhiều câu hỏi thật — xoá đi làm giảm điểm rõ rệt khi test lại (VD ELS053, ELU200). Vá lần cuối, đúng phạm vi rủi ro: chỉ sheet <code>Dataset_*</code>/<code>Demo_*</code> (câu hỏi–đáp án kiểm thử) <strong>vĩnh viễn không nạp vào ChromaDB</strong>; sheet <code>KB_Articles</code>/<code>KB_Articles_Updated</code>/<code>Legal_Update_2025</code> (nội dung tham khảo, không phải câu hỏi kiểm thử) <strong>vẫn được nạp</strong> như văn bản luật thật, có thể được dùng để trả lời câu hỏi người dùng.</p>
+</blockquote>
+<h3 id="bước-1-chuyển-sang-tab-dataset">Bước 1: Chuyển Sang Tab Dataset</h3>
+<p>Tại trang <code>/import</code>, nhấn tab <strong>"📊 Import Dataset"</strong>.</p>
+<h3 id="bước-2-upload-file">Bước 2: Upload File</h3>
+<ul>
+<li>Chọn/kéo thả file <code>.xlsx</code> có sheet <code>KB_Articles</code>/<code>KB_Articles_Updated</code>/<code>Legal_Update_2025</code> và/hoặc sheet <code>Demo_*</code>/<code>Dataset_*</code></li>
+<li>Nhấn <strong>"📥 Lưu làm bộ dữ liệu kiểm thử"</strong></li>
+</ul>
+<h3 id="bước-3-quy-trình-xử-lý-nền-mô-hình-hybrid-2026-07-28">Bước 3: Quy Trình Xử Lý Nền (mô hình hybrid, 2026-07-28)</h3>
+<pre><code>1. Đọc tên các sheet trong file .xlsx
+2. Nếu file không có bất kỳ sheet nào thuộc KB_Articles/KB_Articles_Updated/
+   Legal_Update_2025/Demo_*/Dataset_* → báo lỗi, dừng lại
+3. Lưu file .xlsx gốc vào thư mục Dataset/ (không xoá, không ghi đè — trùng tên
+   thì tự thêm hậu tố thời gian)
+4. Nếu có sheet KB_Articles(_Updated) → dựng đoạn nội dung (article_reference +
+   topic + legal_rule_summary_vi...), nạp vào ChromaDB (có kiểm tra trùng lặp qua
+   doc_id/so_ky_hieu/nội dung y hệt, không nhân đôi khi import lại cùng file)
+5. Nếu có sheet Legal_Update_2025 → xử lý tương tự (đoạn nội dung riêng), nạp vào
+   ChromaDB
+
+&gt; **Cập nhật 2026-07-30 — cột `so_ky_hieu` tường minh (thay cho đoán từ `article_reference`):**
+&gt; Trước đây `so_ky_hieu` bị gán cứng `59/2020/QH14` cho **toàn bộ** sheet
+&gt; KB_Articles_Updated/Legal_Update_2025, bất kể dòng đó thực chất nói về văn bản
+&gt; nào — phát hiện sống ngày 2026-07-30: 20 đoạn ghi rõ trong `article_reference`
+&gt; là &quot;Nghị định 168/2025/NĐ-CP&quot;/&quot;67/VBHN-VPQH&quot;/&quot;Luật 76/2025/QH15&quot; nhưng vẫn bị
+&gt; gắn `so_ky_hieu=59/2020/QH14`, khiến các văn bản đó thua điểm oan trong rerank
+&gt; (dẫn tới nhiều câu trả lời trích dẫn sai văn bản, dù đúng nội dung). Đã vá theo
+&gt; 2 lớp:
+&gt; - **Cột `so_ky_hieu` mới** trong sheet mẫu (thay cho `source_url` cũ ở đúng vị
+&gt;   trí đó — `source_url` vẫn còn, chỉ đổi vị trí cột) — điền tường minh mã văn
+&gt;   bản (VD `59/2020/QH14`, `67/VBHN-VPQH`, `168/2025/NĐ-CP`) là cách chính xác
+&gt;   nhất, được ưu tiên đọc trước nếu có.
+&gt; - Nếu để trống, hệ thống **tự suy ra** từ chữ trong `article_reference`/
+&gt;   `legal_source` (tìm cụm &quot;168/2025&quot;, &quot;67/VBHN-VPQH&quot;, &quot;76/2025/QH15&quot;) — vẫn
+&gt;   hoạt động đúng cho file cũ chưa có cột này, nhưng kém chắc chắn hơn điền tay.
+&gt; - Cùng lúc sửa lỗi phân tích `article_number` cho các dòng gộp nhiều Điều
+&gt;   (VD &quot;Điều 112-115...&quot;) — trước đây rơi vào nhánh dự phòng lỗi, ghép luôn số
+&gt;   Điều với số hiệu/năm thành chuỗi rác kiểu `&quot;1121151682025&quot;`; giờ lấy đúng số
+&gt;   Điều đầu tiên (`&quot;112&quot;`).
+&gt; - `nguon_thu_thap` (nhãn &quot;Nguồn thu thập&quot; hiển thị ở mục 11) đổi từ chuỗi tự
+&gt;   ghép `&quot;{so_ky_hieu} - {sheet_name} dataset&quot;` sang **đúng tên file đã upload**
+&gt;   — dễ truy ngược đoạn nào đến từ file nào hơn.
+6. Sheet Demo_*/Dataset_* KHÔNG được đọc nội dung từng dòng, KHÔNG bao giờ nạp
+   vào ChromaDB — chỉ tồn tại trên đĩa để mục 9 (Đánh giá RAG) đọc trực tiếp
+7. Tự sinh Từ khóa phụ (mục 13.8) cho file từ cột retrieval_keywords của các
+   dòng KB_Articles — không có Từ khóa chính (đặc quyền dành riêng cho Import
+   Văn bản luật, mục 6)
+8. Ghi lại tên file + người nhập + thời điểm nhập vào bảng dataset_file trong
+   chat.db (mục 13.5) — dùng để hiển thị ở tab Dataset của Manage Law (mục 11)
+</code></pre>
+<ul>
+<li>Kết quả trả về: số đoạn KB đã nạp ChromaDB (mới thêm/bỏ qua trùng lặp) + danh sách sheet Demo/Dataset tìm thấy (không nạp)</li>
+<li>Tất cả file dataset (upload qua đây hoặc đặt thủ công) đều nằm trong thư mục<br />
+<strong><code>Dataset/</code></strong> ở gốc dự án — đây là nơi duy nhất hệ thống quét để tìm file cho<br />
+  tính năng Đánh giá RAG (mục 9); file đặt thủ công (không qua giao diện) vẫn dùng<br />
+  được cho mục 9 (quét trực tiếp từ đĩa) nhưng sẽ không xuất hiện ở tab Dataset của<br />
+  Manage Law cho tới khi được track — import lại qua giao diện để cả nạp KB (nếu có)<br />
+  lẫn đăng ký tracking cùng lúc</li>
+<li>File <code>Dataset/example_sheet.xlsx</code> là <strong>file mẫu/template</strong> (phục vụ nút tải mẫu ở mục 9), luôn bị loại khỏi dropdown đánh giá — không phải dữ liệu thật</li>
+</ul>
+<hr />
+<h2 id="9-demo-đánh-giá-hệ-thống-rag--vai-trò-giáo-viên">9. Demo Đánh Giá Hệ Thống RAG — Vai Trò Giáo Viên</h2>
+<p>Ngay bên dưới phần Import Dataset (cùng trang <code>/import</code>, tab <strong>"📊 Import Dataset"</strong>) là khu vực <strong>Đánh giá hệ thống RAG</strong>, dùng để đo chất lượng câu trả lời so với đáp án mẫu.</p>
+<h3 id="bước-0-kết-quả-lần-gần-nhất-tự-hiện-khi-mở-tab">Bước 0: Kết Quả Lần Gần Nhất Tự Hiện Khi Mở Tab</h3>
+<p>Ngay khi mở tab, hệ thống tự gọi <code>GET /latest_eval_result</code> và hiển thị luôn score card của <strong>lần đánh giá gần nhất</strong> (đánh dấu 📌 "Kết quả lần đánh giá gần nhất") — không cần chạy lại mới thấy điểm. Nếu chưa từng chạy đánh giá nào, khu vực này để trống cho tới khi bấm Quick/Full Evaluation lần đầu.</p>
+<h3 id="bước-1-chọn-file-dataset">Bước 1: Chọn File Dataset</h3>
+<ul>
+<li>Dropdown <strong>"File dataset dùng để đánh giá"</strong> liệt kê <strong>mọi file <code>.xlsx</code></strong> trong thư mục <strong><code>Dataset/</code></strong> (ở gốc dự án) có chứa ít nhất một sheet <code>Dataset_*</code> hoặc <code>Demo_*</code> — tự động lấy qua <code>GET /list_datasets</code>, không cần khai báo tên file cứng trong code (trừ <code>example_sheet.xlsx</code>, luôn bị loại vì là file mẫu). Đặt (hoặc để hệ thống tự lưu, xem mục 8) một file mới vào <code>Dataset/</code> (VD dataset 300 câu tương lai) là dropdown tự nhận diện ngay, miễn sheet đặt tên đúng quy ước <code>Dataset_*</code> / <code>Demo_*</code>.</li>
+<li>Mặc định chọn sẵn <code>enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx</code> nếu có trong danh sách.</li>
+<li>Ngay dưới dropdown hiển thị gợi ý các sheet Demo/Dataset tìm thấy trong file đang chọn; nếu file không có sheet Demo, nút <strong>Quick Evaluation</strong> tự động bị mờ/disable kèm cảnh báo.</li>
+</ul>
+<h3 id="bước-2-chọn-chế-độ-đánh-giá">Bước 2: Chọn Chế Độ Đánh Giá</h3>
+<table>
+<thead>
+<tr>
+<th>Chế độ</th>
+<th>Dữ liệu dùng</th>
+<th>Cách chấm</th>
+<th>Tốc độ</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>⚡ Quick Evaluation</strong></td>
+<td><strong>Toàn bộ</strong> sheet <code>Demo_*</code> có trong file đã chọn, gộp lại và loại trùng theo cột <code>id</code> (VD file có cả <code>Demo_30</code> và <code>Demo_50</code> → gộp thành 50 câu duy nhất)</td>
+<td><code>auto</code> — so khớp từ khóa/trích dẫn (offline, không cần Groq)</td>
+<td>Nhanh</td>
+</tr>
+<tr>
+<td><strong>🔬 Full Evaluation</strong></td>
+<td>Gộp <strong>toàn bộ</strong> sheet <code>Dataset_*</code> có trong file đã chọn, loại trùng theo cột <code>id</code> (VD file có cả <code>Dataset_150</code> và <code>Dataset_200</code> → gộp thành 198 câu) — chấm <strong>hết</strong>, không giới hạn số câu <em>(bỏ mức trần lấy-mẫu 80 câu ngày 2026-07-29, cùng lúc thêm xoay vòng nhiều Groq key — xem bên dưới — nên chạy hết dataset không còn bị Groq rate-limit chặn giữa chừng)</em> — mỗi câu tốn 1 lượt gọi Groq cho RAG + 1 lượt cho giám khảo</td>
+<td><code>llm</code> — chấm bằng Groq LLM theo rubric</td>
+<td>Chậm nhất (~3s/câu do throttle Groq, cả dataset)</td>
+</tr>
+<tr>
+<td><strong>🎲 Kiểm tra ngẫu nhiên</strong></td>
+<td>Gộp <strong>cả</strong> <code>Demo_*</code> lẫn <code>Dataset_*</code> trong file đã chọn, loại trùng theo <code>id</code>, rồi lấy mẫu ngẫu nhiên <strong>50 câu</strong> (<code>RANDOM_EVAL_SAMPLE_SIZE</code> trong <code>engine/evaluate_engine.py</code>) từ tập đã gộp — mỗi lần chạy chọn lại ngẫu nhiên</td>
+<td><code>llm</code> — chấm bằng Groq LLM theo rubric</td>
+<td>Nhanh hơn Full (cố định 50 câu)</td>
+</tr>
+</tbody>
+</table>
+<p>File <code>Dataset/example_sheet.xlsx</code> minh hoạ đúng quy ước đặt tên: sheet <strong><code>Demo_Quick_example</code></strong> (tiền tố <code>Demo_</code>) cho Quick Evaluation, sheet <strong><code>Dataset_example</code></strong> (tiền tố <code>Dataset_</code>) cho Full Evaluation. Đổi tên sheet sang tiền tố khác sẽ khiến sheet đó biến mất khỏi cả dropdown lẫn các nút đánh giá — <code>list_available_datasets()</code>/<code>run_evaluation()</code> trong <code>engine/evaluate_engine.py</code> chỉ quét đúng theo 2 tiền tố này.</p>
+<p><strong>Xoay vòng nhiều Groq key (2026-07-29):</strong> <code>groqkey.txt</code> có thể chứa nhiều key, phân tách bằng <code>;</code> (VD <code>gsk_AAA;gsk_BBB;gsk_CCC</code>) — xem <code>engine/groq_keys.py</code>. Mọi lượt gọi Groq (sinh câu trả lời RAG lẫn giám khảo LLM) dùng chung một con trỏ xoay vòng: hễ gặp lỗi rate-limit (429) trên key hiện tại, hệ thống tự chuyển ngay sang key kế tiếp (không chờ) trước khi rơi vào lịch chờ lùi (backoff) như cũ. Chỉ khi mọi key đều bị giới hạn mới thực sự chờ.</p>
+<blockquote>
+<p><strong>Cập nhật 2026-07-26:</strong> <code>example_sheet.xlsx</code> từng thiếu nhiều cột so với <code>enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx</code> thật (8/14 cột ở sheet <code>Dataset_example</code>/<code>Demo_Quick_example</code>, sai hẳn cấu trúc ở <code>Legal_Update_2025</code>) — quan trọng nhất là thiếu cả cột <code>retrieval_keywords</code>, khiến ai dùng file mẫu để tạo dataset mới sẽ vô tình lặp lại lỗi thiếu keywords (xem mục 13.7). Đã cập nhật khớp 100% cột với file dataset thật ở cả 4 sheet.</p>
+<p>Nếu file được chọn <strong>không có sheet Demo</strong> mà vẫn bấm Quick Evaluation (hoặc gọi thẳng API), hệ thống báo lỗi: <code>❌ File '&lt;tên file&gt;' không có sheet Demo — không thể chạy Quick Evaluation cho file này.</code> Tương tự với Full Evaluation và sheet Dataset. Đây là bộ đánh giá đọc trực tiếp từ file <code>.xlsx</code> đã chọn trên đĩa, <strong>không</strong> liên quan tới <code>chat.db</code>/ChromaDB.</p>
+</blockquote>
+<h3 id="bước-3-theo-dõi-tiến-trình--kết-quả">Bước 3: Theo Dõi Tiến Trình &amp; Kết Quả</h3>
+<ul>
+<li>Thanh tiến trình hiển thị số câu đã xử lý / tổng số câu</li>
+<li>Sau khi hoàn tất, hiển thị:</li>
+<li><strong>Điểm tổng</strong> (thang 100), theo rubric 5 tiêu chí có trọng số:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Tiêu chí</th>
+<th>Trọng số</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Độ chính xác pháp lý</td>
+<td>40%</td>
+</tr>
+<tr>
+<td>Trích dẫn điều luật</td>
+<td>20%</td>
+</tr>
+<tr>
+<td>Mức độ liên quan ngữ cảnh</td>
+<td>20%</td>
+</tr>
+<tr>
+<td>Kiểm soát bịa đặt (hallucination)</td>
+<td>15%</td>
+</tr>
+<tr>
+<td>Rõ ràng, dễ hiểu</td>
+<td>5%</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Điểm chi tiết theo <strong>loại câu hỏi</strong> (definition/condition/procedure/general) và theo <strong>độ khó</strong></li>
+<li>Tên file dataset và danh sách sheet đã dùng để đánh giá (VD: <code>Demo_30, Demo_50</code>)</li>
+<li>Kết quả chi tiết từng câu được xuất ra file <code>eval_results_&lt;tên_dataset&gt;_&lt;split&gt;_&lt;mode&gt;_&lt;timestamp&gt;.xlsx</code> tại thư mục gốc dự án (không phải trong <code>Dataset/</code> — đây là file kết quả, không phải file input)</li>
+<li>Nút <strong>"⬇️ Tải sheet kết quả"</strong> xuất hiện ngay trong score card sau khi đánh giá xong — tải trực tiếp file <code>eval_results_*.xlsx</code> nói trên qua <code>GET /download_eval_result/&lt;tên_file&gt;</code> mà không cần vào thư mục dự án tìm thủ công</li>
+<li>Sau mỗi lần chạy, hệ thống <strong>chỉ giữ lại 2 file <code>eval_results_*.xlsx</code> mới nhất</strong> trên đĩa (tự xoá các file cũ hơn) và lưu tóm tắt lần chạy gần nhất vào <code>eval_results_latest.json</code> — đây là dữ liệu Bước 0 dùng để hiển thị lại khi mở tab, không cần giữ toàn bộ lịch sử vì giao diện chưa có màn hình duyệt kết quả cũ.</li>
+</ul>
+<h3 id="lưu-ý-về-độ-chính-xác-của-chấm-điểm-auto-mode">Lưu Ý Về Độ Chính Xác Của Chấm Điểm <code>auto</code> Mode</h3>
+<p>Chế độ <code>auto</code> so khớp trích dẫn bằng cách trích số Điều từ <code>article_reference</code> của bộ câu hỏi rồi tìm chuỗi <code>"điều N"</code> trong câu trả lời. Với các trích dẫn phức tạp hơn (VD <code>"Khoản 35 Điều 4"</code>, <code>"Điều 17 Nghị định 168/2025/NĐ-CP"</code>, hoặc nhiều điều gộp <code>"Điều 27; Điều 38"</code>), hệ thống chỉ lấy đúng số theo sau từ "Điều" trong chuỗi tham chiếu — <strong>không</strong> gộp lẫn số Khoản/số Nghị định/số năm vào cùng một số Điều như trước (lỗi đã sửa ngày 2026-07-21, xem mục 14). Điểm <code>auto</code> vẫn là ước lượng nhanh dựa trên từ khóa, không thay thế được chấm <code>llm</code> (Full Evaluation) khi cần độ chính xác cao.</p>
+<blockquote>
+<p><strong>Mới 2026-08-08:</strong> thêm khu vực <strong>"🧪 So sánh với Vanilla RAG (baseline)"</strong> ngay bên dưới — chạy lại Full Evaluation nhưng thay retrieval/rerank tùy biến bằng RAG cơ bản của LangChain (chỉ <code>similarity_search</code>), để đo đúng phần đóng góp của bộ rerank 8 yếu tố. Việc lưu "2 kết quả gần nhất" cũng đổi từ <strong>1 hạn mức chung cho mọi dataset</strong> sang <strong>hạn mức riêng theo từng dataset</strong> — chạy đánh giá trên dataset B không còn xoá mất lịch sử của dataset A. Xem chi tiết ở mục 15.1 và 15.2.</p>
+</blockquote>
+<hr />
+<h2 id="10-demo-quản-lý-tài-khoản--vai-trò-admin">10. Demo Quản Lý Tài Khoản — Vai Trò Admin</h2>
+<p>Chỉ tài khoản có vai trò <strong>Admin</strong> mới truy cập được các tính năng này.</p>
+<h3 id="bước-1-truy-cập-trang-quản-lý">Bước 1: Truy Cập Trang Quản Lý</h3>
+<ol>
+<li>Đăng nhập bằng tài khoản admin (<code>admin1</code>)</li>
+<li>Nhấn nút <strong>"👤 Manage Account"</strong> trên sidebar — trang <code>/manage_accounts</code> mở ra</li>
+<li>Bảng hiển thị toàn bộ tài khoản: tên đăng nhập, vai trò (pill màu), trạng thái (Đang hoạt động / Đã vô hiệu hóa)</li>
+</ol>
+<h3 id="bước-2-thao-tác-trên-từng-tài-khoản">Bước 2: Thao Tác Trên Từng Tài Khoản</h3>
+<table>
+<thead>
+<tr>
+<th>Thao tác</th>
+<th>Cách thực hiện</th>
+<th>Ghi chú</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vô hiệu hóa</td>
+<td>Nhấn <strong>"Vô hiệu hóa"</strong></td>
+<td>Tài khoản bị khóa đăng nhập, không xóa dữ liệu</td>
+</tr>
+<tr>
+<td>Kích hoạt lại</td>
+<td>Nhấn <strong>"Kích hoạt"</strong></td>
+<td>Cho phép đăng nhập trở lại</td>
+</tr>
+<tr>
+<td>Xoá tài khoản</td>
+<td>Nhấn <strong>"Xoá"</strong> → xác nhận</td>
+<td>Xoá vĩnh viễn tài khoản + toàn bộ chat/lịch sử liên quan</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Admin <strong>không thể tự vô hiệu hóa hoặc tự xoá</strong> chính tài khoản đang đăng nhập — nút tương ứng sẽ bị disable.</p>
+</blockquote>
+<h3 id="bước-3-import-hàng-loạt-tài-khoản">Bước 3: Import Hàng Loạt Tài Khoản</h3>
+<ol>
+<li>Nhấn <strong>"📥 Import tài khoản"</strong> ở góc trên bảng — trang <code>/import_account</code> mở ra</li>
+<li>Tải file mẫu qua link <strong>"⬇️ Tải file Excel mẫu"</strong> (2 cột: <code>Account Name</code>, <code>Role</code>)</li>
+<li>Chọn/kéo thả file <code>.xlsx</code> đã điền, nhấn <strong>"📥 Import tài khoản"</strong></li>
+<li>Mỗi dòng hợp lệ được tạo với mật khẩu mặc định theo vai trò:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Role trong file</th>
+<th>Mật khẩu mặc định</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Student</td>
+<td><code>123456P@ss</code></td>
+</tr>
+<tr>
+<td>Teacher</td>
+<td><code>Teacher@123</code></td>
+</tr>
+</tbody>
+</table>
+<ol start="5">
+<li>Sau khi import xong, hệ thống báo cáo: <strong>Tạo mới</strong>, <strong>Bỏ qua (trùng tên)</strong>, <strong>Bỏ qua (không hợp lệ)</strong></li>
+<li>Nếu có dòng lỗi (trùng tên / thiếu thông tin / role không hợp lệ), nút <strong>"⚠️ Tải tài khoản lỗi"</strong> xuất hiện — tải về file <code>.xlsx</code> liệt kê từng dòng lỗi kèm cột thứ 3 <strong>"Nguyên nhân lỗi"</strong></li>
+</ol>
+<hr />
+<h2 id="11-demo-quản-lý-văn-bản-manage-law--vai-trò-giáo-viên--admin">11. Demo Quản Lý Văn Bản (Manage Law) — Vai Trò Giáo Viên + Admin</h2>
+<p>Trang quản lý tập trung cho <strong>3 luồng import vào ChromaDB</strong> (Văn bản pháp luật — mục 6, Tình huống — mục 7, phần KB_Articles<em>/Legal_Update_2025 của Dataset — mục 8) và tracking file kiểm thử trên đĩa (sheet Demo_</em>/Dataset_<em> của Dataset — không vào ChromaDB, xem mục 14). </em>Cập nhật 2026-07-28:<em> trang <code>/manage_law</code> giờ </em><em>mở cho cả Giáo viên</em><em>, không còn Admin-only như trước — nhưng Giáo viên chỉ thấy đúng 1 tab </em><em>"Văn bản pháp luật"</em><em> và </em><em>không có nút Xoá</em><em>; 3 tab còn lại (Dataset, Tình huống, Kiểm thử hồi quy) cùng tab </em><em>Từ khóa</em>* mới vẫn chỉ Admin thấy được (ẩn phía client dựa theo <code>role</code> trả về từ <code>/session_info</code>, đồng thời các API <code>/list_dataset_sources</code>/<code>/list_scenario_sources</code>/... vẫn chặn 403 phía server nếu không phải Admin — không chỉ ẩn giao diện).</p>
+<h3 id="bước-1-truy-cập-trang-quản-lý">Bước 1: Truy Cập Trang Quản Lý</h3>
+<ol>
+<li>Đăng nhập bằng tài khoản admin (<code>admin1</code>) hoặc giáo viên (<code>teacher1</code>)</li>
+<li>Nhấn nút <strong>"🗂️ Manage Law"</strong> trên sidebar — trang <code>/manage_law</code> mở ra</li>
+<li>Admin thấy đủ <strong>5 tab</strong>; Giáo viên chỉ thấy tab <strong>"📖 Văn bản pháp luật"</strong></li>
+</ol>
+<h3 id="bước-2-chuyển-tab--xoá-dữ-liệu-chỉ-admin-có-nút-xoá">Bước 2: Chuyển Tab &amp; Xoá Dữ Liệu (chỉ Admin có nút Xoá)</h3>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>Nhóm theo</th>
+<th>Ai thấy</th>
+<th>Ghi chú</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>📖 Văn bản pháp luật</strong></td>
+<td>Số ký hiệu (<code>so_ky_hieu</code>)</td>
+<td>Teacher + Admin</td>
+<td>Xoá toàn bộ đoạn có cùng số ký hiệu — vd xoá <code>59/2020/QH14</code> sẽ gỡ hết các đoạn thuộc văn bản đó. Chỉ Admin thấy nút Xoá; cả 2 vai trò đều thấy nút <strong>"Xem thông tin"</strong> (Bước 3)</td>
+</tr>
+<tr>
+<td><strong>📊 Dataset</strong></td>
+<td>Tên file <code>.xlsx</code> đã upload — danh sách hợp nhất từ bảng <code>dataset_file</code> trong <code>chat.db</code> (mọi file đã track) với số đoạn thật trong ChromaDB (đổi 2026-07-28, xem mục 8)</td>
+<td>Admin</td>
+<td>Cột "Đoạn trong database" chỉ đếm đoạn từ sheet KB_Articles<em>/Legal_Update_2025 của file đó (sheet Demo_</em>/Dataset_* không bao giờ có đoạn). Xoá ở đây = xoá file thật khỏi <code>Dataset/</code> + gỡ khỏi theo dõi + gỡ mọi đoạn KB liên quan khỏi ChromaDB, file sẽ biến mất khỏi dropdown đánh giá (mục 9). Không có nút "Xem thông tin" (từ khóa tự sinh, xem mục 8)</td>
+</tr>
+<tr>
+<td><strong>📚 Tình huống</strong></td>
+<td>Tên file <code>.docx</code> đã upload (<code>nguon_thu_thap</code>)</td>
+<td>Admin</td>
+<td>Xoá theo từng file — không ảnh hưởng các file tình huống khác. Không có nút "Xem thông tin" (từ khóa tự sinh, xem mục 7)</td>
+</tr>
+</tbody>
+</table>
+<p>Nhấn <strong>"Xoá"</strong> ở dòng tương ứng → xác nhận → hệ thống xoá toàn bộ đoạn khớp khỏi ChromaDB, đồng thời làm mới whitelist trích dẫn (<code>CITATION_SOURCE</code>) ngay lập tức để không còn trích dẫn tới nguồn đã xoá.</p>
+<blockquote>
+<p><strong>Không thể hoàn tác.</strong> Với văn bản pháp luật/dataset, nếu xoá nhầm thì phải import lại từ file gốc.</p>
+<p><strong>Cập nhật 2026-07-25:</strong> Cả 3 bảng (Văn bản pháp luật/Dataset/Tình huống) có thêm cột <strong>"Người nhập"</strong> — lấy từ <code>request.session["user_name"]</code> tại thời điểm import (fallback <code>admin1</code> nếu thiếu). Dữ liệu import từ trước ngày này không có tên người nhập chính xác.</p>
+</blockquote>
+<h3 id="bước-3-nút-xem-thông-tin--sửa-từ-khóa-của-một-văn-bản-cập-nhật-lớn-2026-07-2930">Bước 3: Nút "Xem Thông Tin" — Sửa Từ Khóa Của Một Văn Bản (cập nhật lớn 2026-07-29/30)</h3>
+<p>Chỉ có ở tab <strong>Văn bản pháp luật</strong>, cho cả Teacher và Admin. Modal hiện có <strong>3 khối</strong> riêng biệt:</p>
+<ol>
+<li>Nhấn <strong>"Xem thông tin"</strong> ở dòng văn bản muốn sửa — mở modal hiển thị: Số ký hiệu, Loại văn bản, Nguồn thu thập, Đoạn trong database, Người nhập (<strong>không</strong> hiện nội dung đoạn văn bản)</li>
+<li><strong>"Tăng ưu tiên theo Điều"</strong> <em>(gộp 2026-07-29 từ 2 mục cũ "Chấm điểm nguồn theo Điều" + "Tăng ưu tiên theo Điều")</em> — áp dụng cho <strong>đúng 1 Điều cụ thể</strong> trong văn bản, không ảnh hưởng Điều khác cùng văn bản:<br />
+   - Phía trên hiện sẵn danh sách <strong>chip các Điều đã có tag</strong> (VD "Điều 77 · 2 từ khóa") — bấm vào chip tự điền số Điều + tải tag, không cần đoán số Điều để tra (2026-07-29, sửa vụ tag ẩn của ELU177/178 — tag tồn tại thật nhưng giao diện cũ không hiện ra)<br />
+   - Ô nhập số Điều <strong>chỉ chấp nhận số Điều có thật trong văn bản này</strong> (2026-07-30, có gợi ý autocomplete, từ chối nếu gõ số không tồn tại) — bấm "Tải từ khóa Điều này" để tải/tạo mới<br />
+   - Chọn từ khóa từ kho <strong>"Chấm điểm nguồn"</strong> — mỗi từ khóa khớp câu hỏi cộng <strong>+15 điểm, cộng dồn</strong> nếu khớp nhiều từ khóa (2026-07-29: trước đây có 2 tầng +8/+15 tách rời, nay gộp một mức +15 duy nhất cho mọi tag cấp Điều bất kể gắn qua mục nào)</li>
+<li><strong>"Từ khóa tăng ưu tiên (priority)"</strong> — áp dụng cho <strong>cả văn bản</strong> (mọi Điều), dùng khi cả văn bản cần ưu tiên hơn văn bản khác (VD văn bản hợp nhất hiện hành nên thắng luật gốc) — cùng cơ chế +15/cộng dồn như trên nhưng phạm vi rộng hơn (cả văn bản thay vì 1 Điều)</li>
+<li>Sửa xong nhấn <strong>"Nộp"</strong> — <strong>không còn</strong> yêu cầu bắt buộc ≥1 từ khóa (2026-07-29, khác với hình 2026-07-28 cũ) — để trống là hợp lệ nếu văn bản này chưa cần phân biệt</li>
+<li>Đóng modal, mở lại vẫn còn nút Xoá bên cạnh (chỉ Admin) — bấm Xoá dùng đúng luồng ở Bước 2, không đi qua modal này</li>
+</ol>
+<blockquote>
+<p><strong>Cơ chế "giảm ưu tiên" (penalty) đã bị xoá hoàn toàn (2026-07-29).</strong> Từng thử: phạt điểm cả văn bản để 59/2020/QH14 thua 168/2025/NĐ-CP — nhưng cùng 1 Điều (Điều 26) vừa cần bị phạt (đúng cho câu này) vừa cần không bị phạt (đúng cho câu khác), không có giá trị phạt nào thoả cả hai vì phạt cấp văn bản không phân biệt được giữa các Điều cùng văn bản. Thay bằng tăng ưu tiên trực tiếp cho đúng Điều (mục 2 ở trên) — không đụng điểm của nguồn cạnh tranh nên không tái tạo xung đột này.</p>
+<p>Một từ khóa đã bị Admin <strong>tắt</strong> (Bước 4) vẫn hiển thị đúng nếu đã gắn cho văn bản này từ trước (vẫn tính điểm bình thường) — chỉ là không xuất hiện trong ô select để <strong>gắn thêm mới</strong>.</p>
+</blockquote>
+<h3 id="bước-4-tab-từ-khóa--quản-lý-danh-sách-từ-khóa-2026-07-28-cập-nhật-2026-07-29-chỉ-admin">Bước 4: Tab "Từ Khóa" — Quản Lý Danh Sách Từ Khóa (2026-07-28, cập nhật 2026-07-29, chỉ Admin)</h3>
+<p>Bảng <code>keyword</code> trong <code>chat.db</code> dùng chung cho <strong>3 mục đích khác nhau</strong>, phân biệt bằng cột <code>status</code> (xem mục 13.8/13.9):</p>
+<table>
+<thead>
+<tr>
+<th>Loại</th>
+<th>status</th>
+<th>Dùng để</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Chấm điểm nguồn</strong></td>
+<td><code>0</code>=đang dùng, <code>1</code>=đã tắt</td>
+<td>Gắn theo Điều cụ thể (Bước 3) — cấp cho một Điều duy nhất</td>
+</tr>
+<tr>
+<td><strong>Chặn ngoài phạm vi</strong></td>
+<td><code>2</code>=đang dùng, <code>3</code>=đã tắt</td>
+<td>Câu hỏi chứa từ khóa loại này (VD "ly hôn", "hình sự") bị từ chối trả lời ngay từ đầu, trước khi truy xuất</td>
+</tr>
+<tr>
+<td><strong>Tăng ưu tiên</strong></td>
+<td><code>8</code>=đang dùng, <code>9</code>=đã tắt</td>
+<td>Gắn cho cả văn bản HOẶC 1 Điều cụ thể (Bước 3) — cộng +15 điểm/khớp, cộng dồn</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><code>status</code> 4–7 (từng là "Giảm ưu tiên" nặng/nhẹ) <strong>đã bị khai tử vĩnh viễn</strong> cùng lúc xoá cơ chế penalty — cố tình không tái sử dụng dải số này, để dữ liệu cũ nào lỡ còn tham chiếu sẽ báo lỗi rõ ràng thay vì âm thầm đổi nghĩa.</p>
+</blockquote>
+<p>Thao tác trong tab:<br />
+1. Form phía trên: ô nhập tên + select chọn loại (<strong>Chấm điểm nguồn</strong> / <strong>Chặn ngoài phạm vi</strong> / <strong>Tăng ưu tiên</strong>) → nhấn <strong>"＋ Thêm từ khóa"</strong>. Tên từ khóa <strong>không được trùng</strong> giữa các loại (1 tên chỉ thuộc 1 loại tại một thời điểm)<br />
+2. Ô <strong>"🔍 Tìm từ khóa theo tên"</strong> lọc trực tiếp bảng bên dưới (không gọi lại server)<br />
+3. Bảng hiển thị <strong>10 dòng/trang</strong>, có nút Trước/Sau ở chân bảng để chuyển trang<br />
+4. Cột "Loại" hiện badge màu, cột "Trạng thái" hiện Đang dùng/Đã tắt, nút bật/tắt và "Đổi loại" tự nhận đúng cặp trạng thái theo loại<br />
+5. <strong>Không có nút xoá từ khóa</strong> qua giao diện — chỉ tắt (status lẻ). Từ khóa hoàn toàn chưa gắn cho nguồn nào (mồ côi) có thể xoá thẳng qua DB nếu cần dọn dẹp (đã làm 1 lần 2026-07-30, xoá 24 từ khóa "Chấm điểm nguồn" chưa từng dùng — xác nhận không ảnh hưởng gì qua bộ kiểm thử hồi quy trước khi xoá)<br />
+6. Bảng "Văn bản pháp luật" có sidebar giải thích riêng (2026-07-29) mô tả từng loại từ khóa — panel bên phải tab, không cần đọc code để hiểu ý nghĩa từng loại</p>
+<h3 id="bước-5-tab-kiểm-thử-hồi-quy-2026-07-25-chỉ-admin">Bước 5: Tab Kiểm Thử Hồi Quy (2026-07-25, chỉ Admin)</h3>
+<p>Tab thứ 4 <strong>"🧪 Kiểm thử hồi quy"</strong> chạy bộ test nhanh (không gọi LLM, không tốn quota Groq) kiểm tra 4 cặp câu hỏi dễ nhầm loại hình doanh nghiệp (VD "TNHH một thành viên" vs "TNHH hai thành viên trở lên") thẳng qua <code>retrieve_docs → filter_compatible_docs → select_best_doc</code> — bảo vệ chống hồi quy cho cơ chế lọc entity-type đã thêm ngày 2026-07-25 (xem mục 14).</p>
+<ol>
+<li>Bấm <strong>"▶️ Chạy kiểm thử"</strong> — job chạy nền, thanh tiến trình cập nhật theo từng câu hỏi (<code>GET /regression_test_status/&lt;job_id&gt;</code>)</li>
+<li>Sau khi xong, mỗi câu hiện ✅/❌ kèm <code>expected</code>/<code>got_best</code>, và cảnh báo nếu tài liệu bị cấm (entity-type sai) vẫn lọt vào danh sách sau lọc</li>
+<li>Hệ thống chỉ giữ <strong>2 lần chạy gần nhất</strong> trong <code>regression_results_history.json</code> — mở lại tab sẽ tự hiện các lần chạy đã lưu (<code>GET /latest_regression_results</code>) mà không cần chạy lại</li>
+<li>Nên chạy lại sau khi sửa logic truy xuất/rerank trong <code>engine/rag_engine.py</code>, hoặc sau khi import dữ liệu luật mới — xem thêm <code>evaluate/retrieval_regression_tests.py</code> (dùng chung logic với <code>engine/regression_test_engine.py</code>, script CLI này cũng chạy độc lập được: <code>python evaluate/retrieval_regression_tests.py</code>)</li>
+</ol>
+<blockquote>
+<p><strong>Mới 2026-08-08 — Publish / Pending:</strong> cả 3 bảng (Văn bản pháp luật/Dataset/Tình huống) có thêm cột <strong>"Trạng thái"</strong> + nút <strong>Publish</strong>/<strong>Chuyển Pending</strong> (chỉ Admin thao tác được). Nguồn mới nhập luôn ở <strong>Pending</strong> — RAG hoàn toàn không dùng để trả lời cho tới khi Admin bấm <strong>Publish</strong>. Dữ liệu import trước ngày này được tự động chuyển thành <strong>Published</strong> khi khởi động lại server, để không làm gián đoạn chatbot đang chạy. Xem chi tiết ở mục 15.3.</p>
+<p><strong>Sửa lỗi 2026-08-08:</strong> nút <strong>"🗂️ Quản lý văn bản luật"</strong> trên sidebar trang chat trước đây chỉ hiện cho Admin dù trang <code>/manage_law</code> đã hỗ trợ Teacher từ 2026-07-28 (mục trên) — Teacher phải gõ thẳng URL mới vào được. Đã sửa để nút hiện đúng cho cả 2 vai trò.</p>
+</blockquote>
+<hr />
+<h2 id="12-câu-hỏi-demo-gợi-ý">12. Câu Hỏi Demo Gợi Ý</h2>
+<p>Sử dụng các câu hỏi sau để minh họa từng tính năng trong buổi demo:</p>
+<h3 id="câu-hỏi-định-nghĩa-definition">Câu Hỏi Định Nghĩa (<code>definition</code>)</h3>
+<pre><code>Quy định về công ty hợp danh là gì?
+Quy định về doanh nghiệp tư nhân là gì?
+Thành viên hợp danh là gì theo Luật Doanh nghiệp?
+Khái niệm công ty TNHH một thành viên là gì?
+</code></pre>
+<h3 id="câu-hỏi-điều-kiện-condition">Câu Hỏi Điều Kiện (<code>condition</code>)</h3>
+<pre><code>Điều kiện để thành lập công ty TNHH là gì?
+Yêu cầu về vốn góp trong công ty cổ phần như thế nào?
+Ai được phép là người đại diện theo pháp luật?
+Tên doanh nghiệp bị cấm trong những trường hợp nào?
+</code></pre>
+<h3 id="câu-hỏi-thủ-tục-procedure">Câu Hỏi Thủ Tục (<code>procedure</code>)</h3>
+<pre><code>Thủ tục đăng ký thành lập doanh nghiệp tư nhân gồm các bước nào?
+Hồ sơ đăng ký thành lập công ty TNHH cần những gì?
+Quy trình thay đổi đăng ký kinh doanh như thế nào?
+Nộp hồ sơ đăng ký doanh nghiệp ở đâu?
+</code></pre>
+<h3 id="câu-hỏi-tổng-quát-general">Câu Hỏi Tổng Quát (<code>general</code>)</h3>
+<pre><code>Công ty cổ phần khác công ty TNHH như thế nào?
+Quyền và nghĩa vụ của thành viên góp vốn là gì?
+Trách nhiệm của thành viên hợp danh trong công ty hợp danh?
+</code></pre>
+<h3 id="câu-hỏi-tình-huống-minh-hoạ-dữ-liệu-từ-mục-7">Câu Hỏi Tình Huống (minh hoạ dữ liệu từ mục 7)</h3>
+<pre><code>Nam 17 tuổi có thể tự đứng tên thành lập công ty TNHH một thành viên không?
+Công chức có được đứng tên thành lập và làm Giám đốc công ty không?
+</code></pre>
+<h3 id="câu-hỏi-meta-về-hệ-thống">Câu Hỏi Meta Về Hệ Thống</h3>
+<pre><code>Database đang lưu bao nhiêu điều luật?
+Luật Doanh nghiệp có bao nhiêu điều?
+</code></pre>
+<h3 id="câu-hỏi-ngoài-phạm-vi-để-minh-họa-cơ-chế-từ-chối">Câu Hỏi Ngoài Phạm Vi (để minh họa cơ chế từ chối)</h3>
+<pre><code>Thủ tục ly hôn cần giấy tờ gì?
+</code></pre>
+<h3 id="demo-tính-năng-từ-khóa-chấm-điểm-nguồn-mới-2026-07-28">Demo Tính Năng Từ Khóa Chấm Điểm Nguồn (mới, 2026-07-28)</h3>
+<p>Gợi ý trình tự demo mục 13.8 trực quan nhất — cần tài khoản admin:</p>
+<ol>
+<li>Vào <strong>Manage Law → tab Từ khóa</strong> (mục 11, Bước 4), thêm 1 từ khóa mới loại "Chấm điểm nguồn", VD <code>"hộ kinh doanh"</code> (đã có sẵn trong danh sách seed, có thể bỏ qua bước này nếu chỉ demo xem)</li>
+<li>Vào tab <strong>Văn bản pháp luật</strong>, bấm <strong>"Xem thông tin"</strong> ở văn bản <code>168/2025/NĐ-CP</code>, gắn <code>"hộ kinh doanh"</code> làm Từ khóa chính, Nộp</li>
+<li>Quay lại chat, hỏi: <code>Hộ kinh doanh phát hiện giấy chứng nhận ghi chưa chính xác so với hồ sơ. Cơ quan đăng ký kinh doanh cấp xã cấp lại trong bao lâu nếu đề nghị chính xác?</code></li>
+<li>Quan sát trích dẫn "📖 Nguồn chính" — nhờ từ khóa vừa gắn, nguồn <code>168/2025/NĐ-CP</code> được ưu tiên đúng thay vì lẫn sang Luật Doanh nghiệp gốc</li>
+</ol>
+<blockquote>
+<p><strong>Mẹo demo:</strong> Bắt đầu bằng câu hỏi định nghĩa để thấy hệ thống khớp chính xác điều luật. Sau đó chuyển sang câu hỏi thủ tục để thấy định dạng danh sách bước. Thử một câu hỏi ngoài phạm vi để minh họa cơ chế từ chối. Cuối cùng nhập PDF/DOCX/tình huống mới hoặc chạy Đánh giá RAG để minh họa các tính năng cho giáo viên/admin.</p>
+</blockquote>
+<hr />
+<h2 id="13-kiến-trúc-kỹ-thuật">13. Kiến Trúc Kỹ Thuật</h2>
+<h3 id="131-cấu-trúc-thư-mục">13.1 Cấu Trúc Thư Mục</h3>
+<pre><code>rag-legal-assistant-master/
+├── app.py                          # FastAPI app — tất cả routes
+├── engine/
+│   ├── rag_engine.py                # Pipeline RAG hỏi đáp + whitelist trích dẫn + quản lý nguồn (Manage Law)
+│   ├── import_law_engine.py         # Pipeline import PDF/DOCX: extract/OCR → phân đoạn → embedding
+│   ├── import_scenario_engine.py    # Pipeline import DOCX tình huống (IRAC) → ChromaDB
+│   ├── import_dataset_engine.py     # Import dataset Excel (150/200-updated) → ChromaDB
+│   ├── import_account_engine.py     # Import tài khoản hàng loạt từ Excel
+│   └── evaluate_engine.py           # Đánh giá chất lượng RAG (auto/llm, demo/all/test)
+├── database/
+│   ├── database.py                  # SQLite: users (3 role), chats, messages
+│   └── reference_source.py          # Script rời — thêm thủ công vài điều luật tham khảo (không qua UI); chạy `python -m database.reference_source` (lệnh có trong terminal.txt), dedupe theo (so_ky_hieu, article_number) nên chạy lại nhiều lần an toàn
+├── templates/
+│   ├── login.html                   # Đăng nhập + đổi mật khẩu
+│   ├── index.html                   # Giao diện chat chính
+│   ├── import_law.html              # Import PDF/DOCX + Import Tình huống + Import Dataset + Đánh giá RAG
+│   ├── manage_accounts.html         # Quản lý tài khoản (Admin)
+│   ├── manage_law.html              # Quản lý văn bản đã import — 5 tab (Teacher: chỉ tab Văn bản; Admin: đủ 5)
+│   └── import_account.html          # Import tài khoản hàng loạt (Admin)
+├── chroma_db/                       # Vector database (ChromaDB)
+├── Dataset/                          # Mọi file .xlsx dùng để đánh giá RAG (mục 9) — nơi duy nhất /list_datasets quét
+│   ├── enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx   # Dataset mới nhất (200 câu, cập nhật pháp lý 2025)
+│   ├── example_sheet.xlsx            # File mẫu cấu trúc Dataset — không dùng để đánh giá
+│   └── example_scenario.docx         # File mẫu cấu trúc Tình huống (mục 7)
+├── uploads_tmp/                     # Lưu file tạm thời khi import (bị xoá/di chuyển ngay sau khi xử lý xong)
+├── eval_results_*.xlsx               # Kết quả đánh giá RAG chi tiết từng câu — chỉ giữ 2 file mới nhất (mục 9)
+├── eval_results_latest.json          # Tóm tắt lần đánh giá gần nhất — hiển thị khi mở tab Đánh giá (mục 9)
+├── chat.db                          # SQLite database
+├── groqkey.txt                      # Groq API key (không commit lên git)
+└── requirements.txt                  # Thư viện
+</code></pre>
+<h3 id="132-api-endpoints">13.2 API Endpoints</h3>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Mô tả</th>
+<th>Quyền</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/</code></td>
+<td>GET</td>
+<td>Trang chủ / đăng nhập</td>
+<td>Public</td>
+</tr>
+<tr>
+<td><code>/login</code></td>
+<td>POST</td>
+<td>Đăng nhập</td>
+<td>Public</td>
+</tr>
+<tr>
+<td><code>/logout</code></td>
+<td>POST</td>
+<td>Đăng xuất</td>
+<td>Logged in</td>
+</tr>
+<tr>
+<td><code>/session_info</code></td>
+<td>GET</td>
+<td>Thông tin phiên hiện tại</td>
+<td>Public</td>
+</tr>
+<tr>
+<td><code>/change_password</code></td>
+<td>POST</td>
+<td>Tự đổi mật khẩu</td>
+<td>Public (cần đúng mật khẩu cũ)</td>
+</tr>
+<tr>
+<td><code>/get</code></td>
+<td>POST</td>
+<td>Hỏi đáp RAG</td>
+<td>Logged in</td>
+</tr>
+<tr>
+<td><code>/create_chat</code></td>
+<td>POST</td>
+<td>Tạo chat mới</td>
+<td>Logged in</td>
+</tr>
+<tr>
+<td><code>/list_chats</code></td>
+<td>GET</td>
+<td>Danh sách chats</td>
+<td>Logged in</td>
+</tr>
+<tr>
+<td><code>/get_chat_messages</code></td>
+<td>GET</td>
+<td>Lịch sử tin nhắn</td>
+<td>Logged in</td>
+</tr>
+<tr>
+<td><code>/rename_chat</code></td>
+<td>POST</td>
+<td>Đổi tên chat</td>
+<td>Logged in</td>
+</tr>
+<tr>
+<td><code>/delete_chat</code></td>
+<td>POST</td>
+<td>Xóa chat</td>
+<td>Logged in</td>
+</tr>
+<tr>
+<td><code>/import</code></td>
+<td>GET</td>
+<td>Trang import văn bản luật / tình huống / dataset</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/import_law</code></td>
+<td>POST</td>
+<td>Upload PDF/DOCX để import</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/import_status/{job_id}</code></td>
+<td>GET</td>
+<td>Tiến trình import PDF/DOCX</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/import_scenario</code></td>
+<td>POST</td>
+<td>Upload DOCX tình huống để import</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/import_scenario_status/{job_id}</code></td>
+<td>GET</td>
+<td>Tiến trình import tình huống</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/download_scenario_example</code></td>
+<td>GET</td>
+<td>Tải file DOCX mẫu cho tình huống</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/import_dataset</code></td>
+<td>POST</td>
+<td>Upload dataset Excel</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/import_dataset_status/{job_id}</code></td>
+<td>GET</td>
+<td>Tiến trình import dataset</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/list_datasets</code></td>
+<td>GET</td>
+<td>Danh sách file <code>.xlsx</code> có thể dùng để đánh giá</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/download_dataset_example</code></td>
+<td>GET</td>
+<td>Tải file Excel mẫu cho dataset</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/evaluate</code></td>
+<td>POST</td>
+<td>Chạy đánh giá RAG (mode/split/dataset_file)</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/evaluate_status/{job_id}</code></td>
+<td>GET</td>
+<td>Tiến trình đánh giá</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/latest_eval_result</code></td>
+<td>GET</td>
+<td>Kết quả tóm tắt lần đánh giá gần nhất</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/download_eval_result/{filename}</code></td>
+<td>GET</td>
+<td>Tải file kết quả đánh giá (<code>eval_results_*.xlsx</code>)</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/manage_accounts</code></td>
+<td>GET</td>
+<td>Trang quản lý tài khoản</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/list_users</code></td>
+<td>GET</td>
+<td>Danh sách tài khoản</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/toggle_user_status</code></td>
+<td>POST</td>
+<td>Vô hiệu hóa / kích hoạt tài khoản</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/delete_user</code></td>
+<td>POST</td>
+<td>Xoá tài khoản</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/import_account</code></td>
+<td>GET / POST</td>
+<td>Trang &amp; xử lý import tài khoản hàng loạt</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/download_account_template</code></td>
+<td>GET</td>
+<td>Tải file Excel mẫu import tài khoản</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/manage_law</code></td>
+<td>GET</td>
+<td>Trang quản lý văn bản đã import (5 tab)</td>
+<td><strong>Teacher, Admin</strong> <em>(mở cho Teacher 2026-07-28, trước đó Admin-only)</em></td>
+</tr>
+<tr>
+<td><code>/list_law_sources</code></td>
+<td>GET</td>
+<td>Danh sách văn bản pháp luật (nhóm theo số ký hiệu)</td>
+<td><strong>Teacher, Admin</strong> <em>(mở cho Teacher 2026-07-28)</em></td>
+</tr>
+<tr>
+<td><code>/delete_law_source</code></td>
+<td>POST</td>
+<td>Xoá một văn bản pháp luật theo số ký hiệu</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/list_dataset_sources</code></td>
+<td>GET</td>
+<td>Danh sách dataset đã import (nhóm theo tên file)</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/delete_dataset_source</code></td>
+<td>POST</td>
+<td>Xoá một dataset theo tên file</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/list_scenario_sources</code></td>
+<td>GET</td>
+<td>Danh sách bộ tình huống đã import (nhóm theo tên file)</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/delete_scenario_source</code></td>
+<td>POST</td>
+<td>Xoá một bộ tình huống theo tên file</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/get_source_info</code> <em>(mới 2026-07-28)</em></td>
+<td>GET</td>
+<td>Thông tin cơ bản + từ khóa của 1 văn bản (<code>?source_type=law&amp;source_key=...</code>) — chỉ hỗ trợ <code>source_type=law</code></td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/update_source_keywords</code> <em>(mới 2026-07-28, mở rộng 2026-07-29)</em></td>
+<td>POST</td>
+<td>Cập nhật từ khóa của 1 văn bản/1 Điều — nay chấp nhận <code>source_type="law_article"</code> (thêm 2026-07-29)</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/get_article_keywords</code> <em>(mới 2026-07-29)</em></td>
+<td>GET</td>
+<td>Từ khóa (mọi kind) đã gắn cho 1 Điều cụ thể (<code>?source_key=...&amp;article_number=...</code>)</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/list_tagged_articles</code> <em>(mới 2026-07-29)</em></td>
+<td>GET</td>
+<td>Danh sách mọi Điều của 1 văn bản đã có ít nhất 1 tag — hiện dạng chip trong modal</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/list_source_articles</code> <em>(mới 2026-07-30)</em></td>
+<td>GET</td>
+<td>Danh sách <strong>mọi</strong> số Điều có thật trong 1 văn bản (không cần đã gắn tag) — dùng để giới hạn ô nhập số Điều</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/list_active_keywords</code> <em>(mới 2026-07-28)</em></td>
+<td>GET</td>
+<td>Danh sách từ khóa "Chấm điểm nguồn" đang bật (status=0) — dùng cho ô chọn cấp Điều</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/list_active_priority_keywords</code> <em>(mới 2026-07-29)</em></td>
+<td>GET</td>
+<td>Danh sách từ khóa "Tăng ưu tiên" đang bật (status=8) — dùng cho ô chọn cấp văn bản/Điều</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/list_keywords</code> <em>(mới 2026-07-28)</em></td>
+<td>GET</td>
+<td>Toàn bộ từ khóa (mọi loại, cả bật lẫn tắt) — dùng cho tab Từ khóa</td>
+<td>Teacher, Admin</td>
+</tr>
+<tr>
+<td><code>/add_keyword</code> <em>(mới 2026-07-28, mở rộng 2026-07-29)</em></td>
+<td>POST</td>
+<td>Thêm từ khóa mới (<code>name</code>, <code>kind</code> — nhận <code>scoring</code>/<code>oos</code>/<code>priority</code>)</td>
+<td>Admin</td>
+</tr>
+<tr>
+<td><code>/toggle_keyword_status</code> <em>(mới 2026-07-28, mở rộng 2026-07-29)</em></td>
+<td>POST</td>
+<td>Bật/tắt hoặc đổi loại 1 từ khóa (<code>id</code>, <code>status</code> — nhận 0/1/2/3/8/9, <strong>không</strong> nhận 4-7 đã khai tử)</td>
+<td>Admin</td>
+</tr>
+</tbody>
+</table>
+<h3 id="133-phân-loại-câu-hỏi-rag">13.3 Phân Loại Câu Hỏi RAG</h3>
+<table>
+<thead>
+<tr>
+<th>Loại</th>
+<th>Từ khóa nhận dạng</th>
+<th>Định dạng trả lời</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>procedure</code></td>
+<td>trình tự, thủ tục, quy trình, các bước, hồ sơ, nộp ở đâu</td>
+<td>Danh sách bước 1, 2, 3…</td>
+</tr>
+<tr>
+<td><code>condition</code></td>
+<td>điều kiện, yêu cầu, cần có, phải có</td>
+<td>Liệt kê điều kiện</td>
+</tr>
+<tr>
+<td><code>definition</code></td>
+<td>là gì, khái niệm, định nghĩa, quy định về</td>
+<td>Ngắn gọn + căn cứ điều luật</td>
+</tr>
+<tr>
+<td><code>general</code></td>
+<td><em>(các câu hỏi khác)</em></td>
+<td>Tự do, nêu đủ căn cứ pháp lý</td>
+</tr>
+</tbody>
+</table>
+<h3 id="134-whitelist-trích-dẫn-citation_source--nhãn-nguồn-gốc-import_source">13.4 Whitelist Trích Dẫn (<code>CITATION_SOURCE</code>) &amp; Nhãn Nguồn Gốc (<code>import_source</code>)</h3>
+<ul>
+<li><strong><code>CITATION_SOURCE</code></strong> (lưu trong <code>chat.db</code>, bảng <code>const</code>) là danh sách mọi <code>so_ky_hieu</code> <strong>đang thực sự có mặt</strong> trong ChromaDB tại thời điểm làm mới gần nhất. <code>build_citation()</code> trong <code>rag_engine.py</code> từ chối in ra bất kỳ số ký hiệu nào không nằm trong danh sách này — chặn trường hợp trích dẫn tới văn bản đã bị xoá hoặc metadata bị hỏng/giả mạo. Danh sách này tự làm mới sau mỗi lần import (mục 6, 8) và sau mỗi lần xoá (mục 11).</li>
+<li>Đoạn dữ liệu từ <strong>Văn bản tình huống</strong> (mục 7) không có <code>so_ky_hieu</code> nên không nằm trong whitelist — đây là chủ đích, không phải thiếu sót (xem giải thích ở mục 7).</li>
+<li><strong><code>import_source</code></strong> là nhãn nội bộ (<code>"law"</code> / <code>"dataset"</code> / <code>"scenario"</code>) gắn vào từng đoạn dữ liệu để trang Manage Law (mục 11) biết đoạn đó thuộc luồng import nào. Dữ liệu import <strong>trước khi</strong> nhãn này tồn tại được tự động gắn nhãn suy luận lúc khởi động ứng dụng (<code>backfill_import_source_tags()</code>, chạy một lần, an toàn khi gọi lại nhiều lần) — dựa trên các dấu hiệu sẵn có trong metadata (VD: có <code>segment_index</code> → <code>"law"</code>; <code>doc_type="scenario_qa"</code> → <code>"scenario"</code>; <code>so_ky_hieu</code> khớp mã dataset mặc định và không có <code>segment_index</code> → <code>"dataset"</code>). Vài đoạn tham khảo thêm bằng tay qua <code>database/reference_source.py</code> (ngoài 3 luồng UI) không được gắn nhãn này, nên sẽ không xuất hiện ở tab Dataset/Tình huống của Manage Law — nhưng vẫn xuất hiện đúng ở tab Văn bản pháp luật (nhóm theo <code>so_ky_hieu</code>).</li>
+<li><strong><code>importer</code></strong> (thêm ngày 2026-07-25) ghi lại <code>user_name</code> của giáo viên/admin thực hiện import, hiển thị ở cột "Người nhập" trong cả 3 tab của Manage Law (mục 11). Dữ liệu import <strong>trước khi</strong> có trường này được gắn mặc định <code>"admin1"</code> lúc khởi động (<code>backfill_importer_tags()</code>, cùng cơ chế idempotent như <code>backfill_import_source_tags()</code> ở trên).</li>
+</ul>
+<h3 id="135-schema-database-sqlite">13.5 Schema Database SQLite</h3>
+<pre><code>users          (user_id, user_name, password, role[0=student,1=teacher,2=admin], status[0=active,1=disabled])
+chats          (id, student_id, title, created_at, role[0=student chat, 1=teacher chat])
+messages       (id, chat_id, role[user|assistant], text, timestamp)
+const          (name, content)   # key/value — VD name=&quot;CITATION_SOURCE&quot; (xem mục 13.4)
+keyword        (id, name, status)   # thêm 2026-07-28, xem mục 13.8/13.9
+               # status: 0=chấm điểm nguồn/đang dùng, 1=chấm điểm nguồn/đã tắt,
+               #         2=chặn ngoài phạm vi/đang dùng, 3=chặn ngoài phạm vi/đã tắt
+source_keyword (id, source_type, source_key, keyword_id, kind)   # thêm 2026-07-28
+               # source_type: law|scenario|dataset ; source_key: so_ky_hieu (law) /
+               # nguon_thu_thap (scenario) / tên file .xlsx (dataset) ; kind:
+               # primary|secondary — law import chọn tay Từ khóa chính (bắt buộc)
+               # + phụ (tuỳ chọn) qua UI; scenario/dataset chỉ tự sinh Từ khóa phụ
+               # từ retrieval_keywords lúc import, không có tay chọn/sửa qua UI
+               # (xem mục 13.8, và mục 14 về vụ data leakage liên quan tới dataset)
+dataset_file   (id, filename, importer, uploaded_at)   # thêm 2026-07-28, xem mục 8/11
+               # Danh sách file dataset .xlsx đã upload, dùng để hợp nhất với số
+               # đoạn ChromaDB thật (KB_Articles*/Legal_Update_2025) khi hiển thị
+               # tab Dataset ở Manage Law — bản thân bảng này không lưu nội dung
+</code></pre>
+<p>Chat giáo viên và học sinh được tách biệt hoàn toàn theo cột <code>role</code>, ngay cả khi <code>user_id</code> trùng nhau. Admin dùng chung không gian chat với vai trò Teacher (<code>role=1</code>).</p>
+<h3 id="136-bộ-lọc-loại-hình-doanh-nghiệp--kiểm-tra-trích-dẫn-sau-sinh-thêm-2026-07-25">13.6 Bộ Lọc Loại Hình Doanh Nghiệp &amp; Kiểm Tra Trích Dẫn Sau Sinh (thêm 2026-07-25)</h3>
+<ul>
+<li><strong><code>filter_compatible_docs()</code></strong> (<code>rag_engine.py</code>): trước khi rerank, loại khỏi danh sách ứng viên mọi tài liệu có loại hình doanh nghiệp xung đột với câu hỏi (VD câu hỏi về "TNHH một thành viên" sẽ loại tài liệu "TNHH hai thành viên trở lên", công ty cổ phần, doanh nghiệp tư nhân, công ty hợp danh). Loại hình được suy luận bằng <code>infer_doc_entity()</code> — quét <code>page_content</code>/<code>topic</code>/<code>retrieval_keywords</code>/<code>title</code> vì metadata hiện tại chưa có trường <code>entity_type</code> riêng. Tài liệu không xác định được loại hình (điều khoản áp dụng chung) luôn được giữ lại thay vì loại nhầm.</li>
+<li><strong><code>validate_answer_citations()</code></strong> (<code>rag_engine.py</code>): sau khi LLM sinh câu trả lời, nếu bất kỳ số Điều nào xuất hiện trong phần <strong>thân</strong> câu trả lời không có mặt trong context đã truy xuất, toàn bộ câu trả lời bị từ chối (trả về cảnh báo) thay vì hiển thị — khác với whitelist <code>CITATION_SOURCE</code> ở mục 13.4 vốn chỉ kiểm tra dòng trích dẫn cuối, cơ chế này chặn cả trường hợp LLM viết sai số Điều ngay trong nội dung trả lời.</li>
+<li>Xem thêm <code>evaluate/retrieval_regression_tests.py</code> — bộ test nhanh (không gọi LLM) kiểm tra các cặp câu hỏi dễ nhầm loại hình doanh nghiệp, nên chạy lại sau khi sửa logic truy xuất/rerank hoặc import dữ liệu mới.</li>
+</ul>
+<hr />
+<h3 id="137-căn-cứ-pháp-lý-chấm-điểm-rerank--chịu-lỗi-chính-tả-thêm-2026-07-2526">13.7 "Căn Cứ Pháp Lý", Chấm Điểm Rerank &amp; Chịu Lỗi Chính Tả (thêm 2026-07-25/26)</h3>
+<p>Loạt sửa lỗi sau khi rà soát kỹ file <code>25-7 nhan xet.docx</code> và đo Quick Evaluation nhiều vòng liên tiếp (~62% → 81.8%):</p>
+<ul>
+<li><strong><code>build_legal_basis_line()</code></strong> (<code>rag_engine.py</code>): mục <strong>"Căn cứ pháp lý"</strong> trong câu trả lời (giữa Kết luận và Phân tích) giờ được <strong>code tự build</strong> từ metadata <code>best_doc</code>/<code>extra_docs</code> — y hệt cách "Nguồn chính"/"Nguồn tham khảo" đã hoạt động — thay vì để LLM tự viết theo gợi ý trong prompt. Trước đây LLM đôi khi viết lệch (VD ghi "Điều 74" trong khi "Nguồn chính" đúng là "Điều 21"), gây mâu thuẫn ngay trong cùng một câu trả lời.</li>
+<li><strong><code>_detect_khoan()</code></strong>: khi tài liệu gốc là một Điều luật có nhiều khoản đánh số, hệ thống so khớp từ ngữ giữa câu trả lời và từng khoản để hiển thị chính xác <strong>"Khoản N Điều X"</strong> thay vì chỉ "Điều X" — chỉ áp dụng khi một khoản rõ ràng nổi bật hơn hẳn các khoản còn lại, mơ hồ thì giữ nguyên cả Điều.</li>
+<li><strong><code>_strip_tone()</code> / <code>_phrase_in()</code></strong>: các danh sách cụm từ nhận diện ý định câu hỏi (<code>_INTENT_PROCEDURE_PHRASES</code>...) và loại hình doanh nghiệp (<code>_ENTITY_ONE_MEMBER_PHRASES</code>...) giờ <strong>chịu được lỗi thiếu dấu thanh</strong> (sắc/huyền/hỏi/ngã/nặng — VD gõ "lâp" thay vì "lập"). Trước đây chỉ cần thiếu 1 dấu là so khớp chuỗi con trượt hoàn toàn, khiến câu hỏi rơi về intent "general", mất hẳn ưu tiên truy xuất tài liệu thủ tục thành lập. <em>Giới hạn:</em> chỉ chịu được thiếu dấu thanh, chưa xử lý gõ không dấu hoàn toàn (bỏ luôn ă/â/ê/ô/ơ/ư/đ).</li>
+<li><strong><code>_score_doc()</code> cân bằng lại trọng số</strong>: bonus "nguồn chính thống" (văn bản luật gốc từ Cổng thông tin chính phủ) giảm từ +20 xuống +6; trọng số khớp từ khóa đơn lẻ cho các đoạn luật gốc mới import (<code>import_source="law"</code>) giảm từ 3x xuống 1x — tránh việc một Điều luật gốc chỉ trùng từ chung chung ("công ty", "cổ đông"...) thắng điểm so với đúng Điều luật cần tìm. Đồng thời phạt điểm nhóm <code>doc_type</code> bắt đầu bằng <code>convert_*</code> (chuyển đổi loại hình) trừ khi câu hỏi thực sự hỏi về chuyển đổi — tránh hòa điểm với các Điều về thành lập/định nghĩa cùng loại hình.</li>
+<li><strong><code>_ENTITY_AGNOSTIC_DOC_TYPES</code></strong>: các <code>doc_type</code> mang tính điều kiện chung cho MỌI loại hình doanh nghiệp (<code>establishment_eligibility</code>, <code>civil_capacity_condition</code>, <code>household_business_eligibility_condition</code>) giờ luôn được <code>infer_doc_entity()</code> trả về "không xác định loại hình" thay vì suy luận nhầm — trước đây một Điều luật tổng quát như Điều 17 (quyền thành lập) bị gán nhầm là "công ty cổ phần" chỉ vì tiêu đề có nhắc "mua cổ phần", khiến nó bị loại khỏi mọi câu hỏi về loại hình khác.</li>
+<li><strong><code>_is_out_of_scope()</code></strong>: thêm <code>_BUSINESS_CONTEXT_SIGNALS</code> — một câu hỏi dính từ khóa "ngoài phạm vi" (VD "hình sự", "gia đình", "quyền sử dụng đất") vẫn được coi là <strong>trong phạm vi</strong> nếu câu hỏi cũng có tín hiệu doanh nghiệp rõ ràng (công ty, doanh nghiệp, góp vốn, thành lập...) — tránh chặn nhầm các câu hỏi Luật Doanh nghiệp hợp lệ chỉ vì nhắc tới điều kiện/lĩnh vực khác như một chi tiết mô tả tình huống.</li>
+<li><strong><code>engine/import_law_engine.py</code></strong>: mỗi Điều luật import từ file luật gốc (PDF/DOCX) giờ có <code>retrieval_keywords</code> tự sinh từ tiêu đề Điều (bỏ tiền tố "Điều N.") — trước đây hoàn toàn thiếu trường này khiến các Điều luật gốc luôn thua điểm so với dữ liệu Excel curated.</li>
+<li><strong><code>engine/import_dataset_engine.py</code></strong>: sửa bug thật trong <code>_build_qa_docs()</code> — hàm đọc đúng cột <code>retrieval_keywords</code> từ file Excel nhưng <strong>quên đưa vào metadata</strong> khi tạo chunk cho sheet <code>Dataset_*</code>/<code>Demo_*</code> (chỉ nhét vào nội dung text, không set field mà <code>_score_doc()</code> thực sự dùng để chấm điểm). <strong>Cần re-import lại dataset đã có</strong> (xoá qua Manage Law rồi import lại — xem mục 11) để chunk cũ được cập nhật, vì cơ chế chống trùng theo <code>doc_id</code> sẽ bỏ qua nếu import chồng lên mà không xoá trước.</li>
+<li><strong>Prompt (<code>build_prompt()</code>)</strong>: thêm quy tắc — nếu câu hỏi về TNHH MỘT thành viên, không liệt kê "danh sách thành viên" trong hồ sơ đăng ký (mục này chỉ áp dụng công ty TNHH hai thành viên trở lên); và quy tắc chung — nội dung tài liệu không áp dụng cho câu hỏi thì <strong>bỏ hẳn</strong> khỏi câu trả lời, không ghi kèm kiểu "(không áp dụng)" gây rối trọng tâm.</li>
+</ul>
+<hr />
+<h3 id="138-cơ-chế-từ-khóa-chấm-điểm-nguồn--tăng-ưu-tiên-thêm-2026-07-28-đại-tu-2026-07-2930">13.8 Cơ Chế Từ Khóa Chấm Điểm Nguồn &amp; Tăng Ưu Tiên (thêm 2026-07-28, đại tu 2026-07-29/30)</h3>
+<p><strong>Vấn đề trước đây:</strong> <code>_score_doc()</code> chỉ boost điểm cho những nguồn khớp điều kiện <strong>viết cứng trong code</strong> (VD <code>_ESTABLISHMENT_DOC_TYPES</code>, hoặc check thẳng chuỗi <code>"168/2025"</code> cho câu hỏi hộ kinh doanh — xem mục 13.7). Văn bản luật mới import qua mục 6 không khớp bất kỳ điều kiện cứng nào, nên <strong>không bao giờ</strong> được các boost đặc thù này, dù nội dung thực sự liên quan.</p>
+<p><strong>Giải pháp ban đầu (2026-07-28):</strong> admin/giáo viên tự gắn Từ khóa chính/phụ cho từng văn bản, +8/+4 điểm khi khớp. <strong>Sau đó phát hiện (2026-07-29): article-level không đủ mạnh để phân biệt 2 Điều cùng văn bản đang cạnh tranh nhau</strong> (VD Điều 26 của 59/2020/QH14 chung chung thắng điểm Điều 76/77 của 168/2025/NĐ-CP dù sai) — dẫn tới toàn bộ đợt redesign sau:</p>
+<ul>
+<li><strong><code>source_type="law_article"</code></strong> — tag không chỉ theo văn bản (<code>so_ky_hieu</code>) mà theo <strong><code>"{so_ky_hieu}#{article_number}"</code></strong>, cho phép chấm điểm phân biệt từng Điều riêng lẻ trong cùng 1 văn bản — đây là mảnh còn thiếu khiến cơ chế 2026-07-28 không đủ mạnh.</li>
+<li><strong>Cơ chế "priority"</strong> (thêm 2026-07-29): mỗi từ khóa priority khớp câu hỏi cộng <strong>+15 điểm, cộng dồn</strong> (không giới hạn 1 lần) — mạnh hơn nhiều +8/+4 cũ, áp dụng được ở <strong>cả 2 cấp</strong>: cả văn bản (document-level, mục 11 Bước 3 khối 3) hoặc đúng 1 Điều (article-level, khối 2).</li>
+<li><strong>Gộp lại (2026-07-29):</strong> "Chấm điểm nguồn theo Điều" (+8, không cộng dồn) và "Tăng ưu tiên theo Điều" (+15, cộng dồn) từng là 2 mục UI/2 cơ chế tách rời — nay gộp thành <strong>một mức +15/cộng dồn duy nhất</strong> ở cấp Điều, chọn từ kho "Chấm điểm nguồn" nhưng tính điểm theo công thức priority. Tag cũ gắn trước khi gộp (dù dưới kind nào: primary/secondary/priority) vẫn tính điểm y hệt — <code>_score_doc()</code> không còn phân biệt kind ở cấp Điều.</li>
+<li><strong>Cơ chế "penalty" (giảm ưu tiên) — thử rồi xoá hoàn toàn (2026-07-29):</strong> ý tưởng là phạt điểm cả văn bản để 59/2020/QH14 luôn thua 168/2025/NĐ-CP — nhưng Điều 26 của 59/2020/QH14 vừa cần bị phạt (đúng cho ELU177/178) vừa cần <strong>không</strong> bị phạt (đúng cho ELS066/ELU170/ELU169 — cùng Điều, câu hỏi khác) — không giá trị phạt cấp văn bản nào thoả cả hai, vì phạt/thưởng cấp văn bản không phân biệt được các Điều cùng văn bản. Ưu tiên trực tiếp cho đúng Điều (không đụng điểm nguồn cạnh tranh) giải quyết đúng gốc rễ mà không tái tạo xung đột này.</li>
+<li><strong>Bug tìm thấy 2026-07-30 — <code>_source_keyword_candidates()</code> không hề nhận diện tag priority:</strong> hàm augmentation (kéo thêm ứng viên vào candidate pool khi câu hỏi khớp từ khóa của 1 nguồn — mô tả gốc bên dưới) chỉ kiểm tra bucket primary/secondary, chưa từng kiểm tra priority — nghĩa là <strong>toàn bộ</strong> tag priority (cả cấp văn bản lẫn cấp Điều, xây suốt 2026-07-29) chưa bao giờ được đảm bảo lọt vào candidate pool, chỉ tình cờ vào được nhờ keyword_recall/semantic search xếp hạng đủ cao. Đã vá: kiểm tra cả 3 bucket, và nhận diện thêm key <code>law_article</code> (trước đây hàm chỉ dựng key <code>law</code>/<code>dataset</code>/<code>scenario</code>, chưa từng dựng <code>law_article</code>).</li>
+<li><strong>Chấm điểm (rerank):</strong> khớp Từ khóa chính (cấp Điều, xem trên) → <strong>+15 điểm/khớp, cộng dồn</strong>. Trước đây thử +8/+4 rồi +65/+20 (2 tầng nặng/nhẹ), test thật cho thấy chưa đủ khoảng cách với các nguồn cạnh tranh mạnh — cuối cùng chốt <strong>1 mức +15 duy nhất, cộng dồn theo số từ khóa khớp</strong> (nhiều từ khóa đặc thù hơn &gt; 1 số lớn duy nhất, dễ kiểm chứng bằng test thật hơn là đoán số).</li>
+<li><strong>Truy xuất (retrieval augmentation):</strong> ngoài chấm điểm, nếu câu hỏi khớp từ khóa của 1 nguồn (văn bản hoặc Điều), hệ thống còn <strong>chủ động kéo thêm top-5 đoạn phù hợp nhất</strong> của nguồn đó vào danh sách ứng viên. Chỉ kéo top-5, <strong>không kéo cả nguồn</strong>, vì một nguồn được gắn có thể có hàng trăm đoạn — kéo hết sẽ làm loãng candidate pool.</li>
+<li>Cơ chế <strong>cộng thêm hoàn toàn</strong> (additive) — nguồn chưa được gắn từ khóa nào hoạt động y hệt trước đây, không có gì thay đổi. Xác nhận qua <code>evaluate/retrieval_regression_tests.py</code> (4/4 pass) mỗi lần sửa.</li>
+<li>Chỉ <strong>Văn bản pháp luật</strong> mới gắn được cả 2 cấp (văn bản + Điều); <strong>Tình huống</strong> và phần <strong>KB_Articles*/Legal_Update_2025 của Dataset</strong> chỉ tự sinh Từ khóa phụ vì là dữ liệu làm giàu ngữ cảnh, không phải nguồn thẩm quyền (xem mục 7, mục 8).</li>
+</ul>
+<blockquote>
+<p><strong><code>_keyword_recall()</code> top_n mở rộng 5→12 (2026-07-30):</strong> một cụm nhiều Điều cùng chủ đề (VD Điều 74–87 của 59/2020/QH14 đều về "công ty TNHH một thành viên") có thể hoà điểm keyword-overlap thô, và top-5 quá hẹp để cả cụm cùng vào candidate pool cho <code>_score_doc()</code> phân xử tiếp — mở rộng lên 12 chỉ <strong>thêm</strong> ứng viên được xét, không đổi điểm số bất kỳ đoạn nào đang đúng, nên an toàn tuyệt đối (đã kiểm chứng qua bộ test thật + hồi quy).</p>
+<p><strong>Boost "định nghĩa cấp Điều" (<code>_DEFINITION_DOC_TYPES</code>, 2026-07-30):</strong> với câu hỏi loại "định nghĩa" HOẶC "tình huống" (VD "2 người cùng góp 50%, có còn là công ty TNHH một thành viên không?" — không hỏi thẳng "là gì" nhưng vẫn cần Điều định nghĩa gốc thắng các Điều anh em về quyền/nghĩa vụ/vốn), Điều nào có <code>doc_type</code> thuộc nhóm "Điều định nghĩa gốc của loại hình doanh nghiệp" (đã kiểm tra nội dung từng <code>doc_type</code> thật, không đoán theo tên) được cộng thêm <strong>+12 điểm</strong>.</p>
+</blockquote>
+<h3 id="139-danh-sách-chặn-ngoài-phạm-vi-chuyển-vào-database-thêm-2026-07-28">13.9 Danh Sách Chặn Ngoài Phạm Vi Chuyển Vào Database (thêm 2026-07-28)</h3>
+<p>Trước đây <code>OUT_OF_SCOPE_KEYWORDS</code> (mục 13.7, <code>_is_out_of_scope()</code>) là 1 list Python viết cứng trong <code>rag_engine.py</code> — muốn thêm/bớt cụm từ chặn phải sửa code. Giờ nguồn dữ liệu chính là bảng <code>keyword</code> với <code>status=2</code> (đang dùng) — quản lý qua <strong>Manage Law → tab Từ khóa</strong> (mục 11, Bước 4), admin có thể tự thêm/tắt mà không cần sửa code.</p>
+<ul>
+<li><code>ask_rag()</code> gọi <code>get_active_out_of_scope_keywords()</code> (đọc từ DB) mỗi câu hỏi; nếu đọc DB lỗi vì lý do nào đó, <strong>fail-safe</strong> về lại list Python cũ (<code>OUT_OF_SCOPE_KEYWORDS</code>) — không bao giờ fail-open (tắt hẳn việc chặn).</li>
+<li>Đã seed sẵn 24 cụm (23 cụm cũ + thêm mới <code>"nhà đất"</code> — phát hiện thiếu ngày 2026-07-28: câu "Thủ tục mua bán nhà đất..." lọt qua chặn vì list cũ chỉ có "đất đai"/"nhà ở"/"bất động sản", không có "nhà đất").</li>
+<li><strong>Không ảnh hưởng</strong> tới chấm điểm nguồn (mục 13.8) — 2 cơ chế dùng chung 1 bảng <code>keyword</code> nhưng khác hẳn mục đích, phân biệt bằng <code>status</code> (0/1 = chấm điểm, 2/3 = chặn phạm vi), không bao giờ lẫn lộn (<code>get_active_keywords()</code> chỉ lấy status=0, <code>get_active_out_of_scope_keywords()</code> chỉ lấy status=2).</li>
+</ul>
+<hr />
+<h2 id="14-xử-lý-sự-cố">14. Xử Lý Sự Cố</h2>
+<h3 id="ứng-dụng-không-khởi-động-được--valueerror--torchload---check_torch_load_is_safe">Ứng Dụng Không Khởi Động Được — <code>ValueError: ... torch.load ...</code> / <code>check_torch_load_is_safe</code></h3>
+<p><strong>Triệu chứng:</strong> <code>python app.py</code> (hoặc bất kỳ script nào <code>import engine.rag_engine</code>) crash ngay khi tải embedding model, log có dòng <code>Due to a serious vulnerability issue in torch.load, ... we now require users to upgrade torch to at least v2.6</code>.</p>
+<p><strong>Nguyên nhân (2026-07-25):</strong> Đổi embedding model sang <code>BAAI/bge-m3</code> (đa ngôn ngữ, xem mục 1 và 13.6) — <code>transformers</code> chặn load checkpoint qua <code>torch.load</code> nếu torch &lt; 2.6 (bản vá CVE-2025-32434). Môi trường có sẵn trước đó thường cài torch 2.5.x.</p>
+<p><strong>Khắc phục:</strong></p>
+<pre><code class="language-bash">pip uninstall torch torchvision -y
+pip install &quot;torch&gt;=2.6&quot; torchvision --index-url https://download.pytorch.org/whl/cpu
+</code></pre>
+<p>Dùng <code>--index-url .../cu118</code> hoặc <code>.../cu121</code> thay cho <code>/cpu</code> nếu cần tăng tốc OCR bằng GPU NVIDIA (xem <code>install.bat</code> hoặc mục "OCR Chạy Chậm" bên dưới) — không bắt buộc phải có GPU để chạy embedding, <code>bge-m3</code> được cấu hình chạy CPU mặc định trong cả 4 nơi dùng đến nó (<code>rag_engine.py</code> + 3 file <code>import_*_engine.py</code>).</p>
+<hr />
+<h3 id="lỗi-không-kết-nối-groq">Lỗi Không Kết Nối Groq</h3>
+<p><strong>Triệu chứng:</strong> Câu trả lời trả về <code>❌ Lỗi hệ thống.</code></p>
+<p><strong>Kiểm tra:</strong><br />
+- File <code>groqkey.txt</code> tồn tại và chứa API key hợp lệ (bắt đầu bằng <code>gsk_</code>)<br />
+- Có kết nối Internet<br />
+- API key chưa hết hạn / hết quota tháng</p>
+<p><strong>Lưu ý:</strong> Groq có tự động retry 3 lần (5s / 10s / 15s) khi gặp lỗi rate limit / timeout.</p>
+<hr />
+<h3 id="chromadb-trống--không-tìm-thấy-kết-quả">ChromaDB Trống — Không Tìm Thấy Kết Quả</h3>
+<p><strong>Triệu chứng:</strong> <code>⚠️ Không tìm thấy thông tin đủ liên quan trong cơ sở dữ liệu.</code></p>
+<p><strong>Nguyên nhân:</strong> Chưa có dữ liệu trong ChromaDB.</p>
+<p><strong>Khắc phục:</strong><br />
+- Import trực tiếp từ file PDF/DOCX qua giao diện giáo viên (xem mục 6)<br />
+- Hoặc import bộ tình huống DOCX (xem mục 7)<br />
+- Hoặc import nhanh từ dataset Excel có sẵn qua giao diện (xem mục 8)</p>
+<blockquote>
+<p>⚠️ <strong>Hạn chế dùng</strong> các script rời trong <code>database/</code> (<code>build_db_from_pdf.py</code>, <code>build_db_from_dataset_updated.py</code>, <code>build_db_doc.py</code>...) để nạp dữ liệu — đây là script bootstrap cũ, không được bảo trì thường xuyên như giao diện Import. Ngày 2026-07-25 đã rà soát và đổi toàn bộ embedding hardcode trong các script này từ <code>bge-small-en-v1.5</code> sang <code>bge-m3</code> cho khớp với <code>chroma_db</code> hiện tại (1024 chiều), nhưng ưu tiên vẫn nên dùng giao diện Import (mục 6/7/8) — nơi được kiểm thử và cập nhật sát nhất với engine hiện hành.</p>
+</blockquote>
+<hr />
+<h3 id="ocr-chạy-chậm">OCR Chạy Chậm</h3>
+<p><strong>Nguyên nhân:</strong> Mặc định dùng CPU, chỉ kích hoạt khi PDF là bản scan. File 50 trang mất 10–30 phút.</p>
+<p><strong>Tăng tốc với GPU (nếu có NVIDIA CUDA):</strong></p>
+<p>Tạo file <code>.device_config</code> tại thư mục gốc:</p>
+<pre><code>DEVICE=cuda
+</code></pre>
+<hr />
+<h3 id="lỗi-poppler-không-tìm-thấy">Lỗi Poppler Không Tìm Thấy</h3>
+<p><strong>Triệu chứng:</strong> <code>PDFPageCountError</code> hoặc <code>Unable to get page count</code></p>
+<p><strong>Khắc phục:</strong> Kiểm tra thư mục <code>poppler/Library/bin/</code> tồn tại và có các file binary (pdftoppm.exe, pdfinfo.exe…). Nếu thiếu, tải Poppler cho Windows từ https://github.com/oschwartz10612/poppler-windows/releases và giải nén vào đúng đường dẫn.</p>
+<hr />
+<h3 id="lỗi-đăng-nhập-thất-bại">Lỗi Đăng Nhập Thất Bại</h3>
+<p><strong>Triệu chứng:</strong> Thông báo "Đăng nhập thất bại" hoặc "Tài khoản đã bị vô hiệu hóa"</p>
+<p><strong>Kiểm tra:</strong><br />
+- Tên đăng nhập và mật khẩu phân biệt chữ hoa/thường<br />
+- Tài khoản mặc định (student/teacher/admin) chỉ được tạo khi bảng <code>users</code> <strong>trống hoàn toàn</strong> (lần khởi động đầu tiên) — nếu thiếu tài khoản admin, dùng Import tài khoản (mục 10) hoặc thêm thủ công vào bảng <code>users</code><br />
+- Tài khoản bị Admin vô hiệu hóa sẽ không đăng nhập được cho tới khi được kích hoạt lại</p>
+<hr />
+<h3 id="đánh-giá-rag-dùng-sai-dataset">Đánh Giá RAG Dùng Sai Dataset</h3>
+<p><strong>Triệu chứng:</strong> Kết quả đánh giá không phản ánh dataset mong muốn</p>
+<p><strong>Nguyên nhân:</strong> <code>/evaluate</code> đọc từ file <code>.xlsx</code> được chọn ở dropdown "File dataset dùng để đánh giá" (mục 9, bước 1), <strong>không</strong> phải từ dữ liệu vừa import vào ChromaDB qua mục 8 — đây là hai nguồn hoàn toàn khác nhau (file trên đĩa vs vector DB).</p>
+<p><strong>Khắc phục:</strong> Kiểm tra lại dropdown đã chọn đúng file mong muốn trước khi bấm Quick/Full Evaluation. Nếu file mới không xuất hiện trong dropdown, xác nhận file <code>.xlsx</code> đã nằm trong thư mục <strong><code>Dataset/</code></strong> (không phải thư mục gốc dự án) và có ít nhất một sheet đặt tên đúng quy ước <code>Dataset_*</code> hoặc <code>Demo_*</code>.</p>
+<hr />
+<h3 id="quick-evaluation-bị-disable--báo-lỗi-không-có-sheet-demo">Quick Evaluation Bị Disable / Báo Lỗi "Không Có Sheet Demo"</h3>
+<p><strong>Triệu chứng:</strong> Nút Quick Evaluation bị mờ, hoặc chạy báo <code>❌ File '...' không có sheet Demo…</code></p>
+<p><strong>Nguyên nhân:</strong> File dataset đang chọn chỉ có sheet <code>Dataset_*</code> (dùng được cho Full Evaluation) nhưng thiếu sheet <code>Demo_*</code>.</p>
+<p><strong>Khắc phục:</strong> Chọn file khác có sẵn sheet <code>Demo_*</code> trong dropdown, hoặc thêm một sheet đặt tên <code>Demo_&lt;số&gt;</code> vào file Excel đó rồi tải lại trang.</p>
+<hr />
+<h3 id="trả-lời-sai-nội-dung--trích-dẫn-sai-điều-luật-vd-hỏi-điều-143-ra-nội-dung-điều-khác">Trả Lời Sai Nội Dung / Trích Dẫn Sai Điều Luật (VD: hỏi "Điều 143" ra nội dung Điều khác)</h3>
+<p><strong>Triệu chứng:</strong> Đặt câu hỏi nêu rõ số Điều (VD: "Điều 143") hoặc một từ khóa ngắn (VD: "Tập đoàn") nhưng câu trả lời/trích dẫn không khớp với Điều luật thực sự nói về nội dung đó.</p>
+<p><strong>Nguyên nhân đã phát hiện (2026-07-06):</strong> Dữ liệu văn bản 67/VBHN-VPQH trong ChromaDB từng bị import bằng <code>database/build_db_doc.py</code> với regex tách "Điều X." gõ nhầm ký tự (<code>Dieu</code> ASCII thay vì <code>Điều</code> tiếng Việt) — regex này không bao giờ khớp, khiến toàn bộ văn bản bị cắt cứng thành từng đoạn 3000 ký tự bất kể ranh giới Điều luật, và metadata <code>article_number</code> chỉ là số thứ tự đoạn (không phải số Điều thật). Hệ quả: một đoạn có thể chứa nội dung của 2 Điều liền kề, và tra cứu theo số Điều/từ khóa ngắn trả về sai.</p>
+<p><strong>Đã khắc phục:</strong><br />
+- Sửa regex trong <code>database/build_db_doc.py</code> và <code>engine/import_law_engine.py</code> để khớp đúng "Điều X." (ký tự Đ tiếng Việt)<br />
+- Cả 2 script giờ <strong>cảnh báo rõ ràng</strong> thay vì âm thầm gán số Điều giả nếu vẫn rơi vào fallback<br />
+- <code>engine/rag_engine.py</code> được thêm 2 cơ chế truy xuất mới: (1) tra thẳng theo metadata khi câu hỏi có dạng "Điều N", (2) quét từ khóa trực tiếp cho câu hỏi ngắn (≤5 từ, VD "Tập đoàn") — thay vì chỉ dựa vào tìm kiếm ngữ nghĩa</p>
+<p><strong>Nếu ChromaDB hiện tại vẫn còn dữ liệu luật bị chunk sai</strong> (dấu hiệu: metadata <code>article_number</code> trùng với <code>segment_index + 1</code>), có thể chạy <code>python database/rebuild_law_from_docx.py</code> để build lại đúng theo từng Điều từ file DOCX gốc — script này đã dùng đúng embedding <code>BAAI/bge-m3</code> (đã sửa ngày 2026-07-25), khớp với phần dữ liệu còn lại trong <code>chroma_db</code>.</p>
+<hr />
+<h3 id="điểm-đánh-giá-auto-mode-thấp-bất-thường-dù-câu-trả-lời-đúng">Điểm Đánh Giá <code>auto</code> Mode Thấp Bất Thường Dù Câu Trả Lời Đúng</h3>
+<p><strong>Triệu chứng:</strong> Chạy Quick Evaluation, nhiều câu có <code>citation_correct = 0</code> và <code>hallucination</code> thấp dù xem thủ công thấy câu trả lời <strong>trích dẫn đúng</strong> điều luật yêu cầu.</p>
+<p><strong>Nguyên nhân đã phát hiện (2026-07-21):</strong> <code>_auto_score()</code> trong <code>engine/evaluate_engine.py</code> từng lấy số Điều bằng cách xoá hết ký tự không phải số trong toàn bộ chuỗi <code>article_reference</code> — với tham chiếu chỉ có một số (VD <code>"Điều 17"</code>) thì đúng, nhưng với tham chiếu có nhiều số (VD <code>"Khoản 35 Điều 4"</code> → gộp thành <code>"354"</code>, <code>"Điều 17 Nghị định 168/2025/NĐ-CP"</code> → gộp thành <code>"171682025"</code>) thì số bị gộp sai hoàn toàn và không bao giờ khớp được với văn bản trả lời thật, dù trả lời đúng 100%. Lỗi này ảnh hưởng 23/50 câu (46%) trong bộ dữ liệu <code>enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx</code>, kéo điểm tổng từ mức thực tế ~73/100 xuống còn 66.7/100.</p>
+<p><strong>Đã khắc phục:</strong> Đổi sang trích riêng số theo sau từ khoá "Điều" (<code>_extract_article_numbers</code>), có fallback theo số hiệu văn bản/nghị định khi tham chiếu không chứa "Điều" (VD chỉ có <code>"76/2025/QH15"</code>). Xác minh trên dữ liệu thật: 14/50 câu chuyển từ chấm sai (0 điểm) sang chấm đúng (3 điểm), không có câu nào bị chấm sai theo chiều ngược lại.</p>
+<p><strong>Nếu vẫn thấy điểm bất thường:</strong> Kiểm tra định dạng cột <code>article_reference</code> trong file dataset — chấm điểm chỉ nhận diện được số Điều đứng ngay sau từ "Điều" (không phân biệt hoa/thường), các dạng viết tắt khác (VD chỉ ghi số Điều mà không có chữ "Điều") sẽ không được nhận diện.</p>
+<p><strong>Đợt sửa tiếp theo (2026-07-25/26) — riêng chỉ số <code>hallucination</code> và <code>clarity</code> bị chấm oan:</strong></p>
+<ul>
+<li><strong><code>hallucination</code> đếm trùng lặp:</strong> câu trả lời hợp lệ nhắc lại cùng một số Điều ở cả "Căn cứ pháp lý" lẫn phần "Nguồn tham khảo" footer (xem mục 13.7) — bản cũ đếm theo <code>list</code> nên mỗi lần lặp lại bị trừ điểm thêm một lần. Đã đổi sang đếm theo <code>set</code> (không trùng lặp).</li>
+<li><strong><code>hallucination</code> phạt oan các Điều bổ sung hợp lệ:</strong> một câu trả lời "thành lập X" đúng đắn thường trích dẫn nhiều Điều cùng lúc (hồ sơ + trình tự + định nghĩa — xem <code>build_legal_basis_line()</code> mục 13.7), nhưng cột <code>article_reference</code> trong dataset chỉ liệt kê <strong>một</strong> Điều làm đáp án mẫu, khiến các Điều còn lại — dù đúng — vẫn bị tính là "hallucination". Đã sửa: một số Điều chỉ bị coi là hallucination nếu <strong>không xuất hiện trong <code>retrieved_context</code> thật</strong> (ngữ cảnh RAG đã truy xuất cho câu hỏi đó) — cùng nguyên tắc <code>validate_answer_citations()</code> đang dùng trong app thật (mục 13.6). Đồng thời cột <code>expected_retrieved_context</code> (nếu dataset có điền) cũng được cộng vào tập "đúng" khi chấm <code>citation_correct</code>/<code>hallucination</code>.</li>
+<li><strong><code>clarity</code> tính nhầm độ dài footer:</strong> word-count trước đây tính luôn cả phần "📖 Nguồn chính / 📎 Nguồn tham khảo" (không phải văn xuôi, là metadata trích dẫn hệ thống tự thêm) vào tổng số từ, khiến câu trả lời có nhiều nguồn tham khảo dễ vượt trần 200 từ và bị trừ điểm oan. Đã sửa: chỉ đếm phần thân câu trả lời, bỏ qua mọi thứ từ "📖 Nguồn chính:" trở đi.</li>
+<li><strong>Kết quả đo thực tế trên <code>Demo_30</code>+<code>Demo_50</code> (auto mode):</strong> 62.2% → 65.0% → 71.5% → 81.8% → <strong>88.5%</strong> qua các đợt sửa trên (mỗi đợt đo lại bằng Quick Evaluation thật, không ước lượng) — riêng bước cuối (chấm hallucination dựa trên <code>retrieved_context</code> grounded, không chỉ dựa vào 1 đáp án mẫu duy nhất) đưa <code>hallucination</code> từ 1.52/3 lên 2.86/3.</li>
+</ul>
+<hr />
+<h3 id="lịch-sử-không-còn-áp-dụng-import-dataset-tạo-đoạn-trùng-khi-nhập-lại-cùng-file">[LỊCH SỬ, KHÔNG CÒN ÁP DỤNG] Import Dataset Tạo Đoạn Trùng Khi Nhập Lại Cùng File</h3>
+<p><strong>Đã sửa 2026-07-28 sáng</strong> — vẫn áp dụng cho phần KB_Articles*/Legal_Update_2025 (phần duy nhất còn nạp ChromaDB sau bản vá cuối, xem mục ngay dưới). Giữ lại đoạn này để ghi nhớ bối cảnh: <code>run_import_dataset()</code> từng lọc trùng theo <code>doc_id</code> hoặc theo Số ký hiệu + nhãn <code>"KB_Articles"</code>, nhưng sheet <code>Legal_Update_2025</code> không khớp điều kiện nào nên bị trùng mỗi lần nhập lại — đã sửa bằng cách thêm fallback so khớp nguyên văn nội dung khi thiếu cả 2 điều kiện trên. Chính triệu chứng này dẫn tới việc rà lại toàn bộ pipeline và phát hiện ra rủi ro data leakage nghiêm trọng hơn ở mục dưới.</p>
+<hr />
+<h3 id="bộ-câu-hỏi-full-evaluation-từng-bị-lẫn-vào-chromadb-data-leakage--đã-khắc-phục-2026-07-28-2-đợt-vá">Bộ Câu Hỏi Full Evaluation Từng Bị Lẫn Vào ChromaDB (data leakage) — ĐÃ KHẮC PHỤC 2026-07-28 (2 đợt vá)</h3>
+<p><strong>Triệu chứng đã quan sát trước khi sửa:</strong> Điểm Full Evaluation (mục 9) cao bất thường hoặc dao động mạnh giữa các lượt chạy trên cùng 1 bộ câu hỏi.</p>
+<p><strong>Nguyên nhân (phát hiện 2026-07-28, xác minh trực tiếp trên ChromaDB đang chạy):</strong> File dataset dùng để Full Evaluation (sheet <code>Dataset_150</code>/<code>Dataset_200</code>) cũng chính là file được import vào ChromaDB qua mục 8 kiểu cũ. Kết quả: 200 dòng câu hỏi–đáp án của <code>Dataset_200</code> từng nằm trong ChromaDB dưới dạng đoạn chứa nguyên văn <code>"Câu hỏi: ... / Trả lời: ..."</code>. Khi chạy Full Evaluation, hệ thống có thể vô tình truy xuất trúng chính đáp án mẫu thay vì tự suy luận từ luật gốc — làm điểm bị thổi phồng ở những câu bị trùng.</p>
+<p><strong>Đợt vá 1 (quá rộng, đã bị thay thế):</strong> Xoá toàn bộ 310 đoạn có <code>import_source="dataset"</code> khỏi ChromaDB — gồm cả <code>Dataset_200</code> (đúng nguồn rò rỉ) lẫn <code>KB_Articles_Updated</code>/<code>Legal_Update_2025</code> (nội dung tham khảo do giáo viên biên soạn, <strong>không phải</strong> câu hỏi kiểm thử). Việc xoá nhầm phần KB làm giảm điểm rõ rệt khi test lại 10 câu bất kỳ — VD <code>ELS053</code> (trích dẫn sai Điều 78 thay vì Điều 207) và <code>ELU200</code> (mất điểm <code>citation_correct</code>) — vì các câu này thực sự dựa vào nội dung KB đã bị xoá oan để trả lời đúng.</p>
+<p><strong>Đợt vá 2 (cuối cùng, đúng phạm vi rủi ro):</strong> Viết lại <code>import_dataset_engine.py</code> để phân biệt rõ 2 loại sheet: <code>Dataset_*</code>/<code>Demo_*</code> (câu hỏi–đáp án kiểm thử — nguồn rò rỉ thật) <strong>vĩnh viễn không nạp vào ChromaDB</strong>, chỉ lưu file vào <code>Dataset/</code> + track trong bảng <code>dataset_file</code> (<code>chat.db</code>, mục 13.5) phục vụ Quick/Full Evaluation (mục 9); còn <code>KB_Articles</code>/<code>KB_Articles_Updated</code>/<code>Legal_Update_2025</code> (nội dung tham khảo, không phải test) <strong>được nạp lại vào ChromaDB</strong> như trước — có dùng để trả lời câu hỏi thật. Xem mục 8 để biết luồng chi tiết.</p>
+<p><strong>Xác minh sau đợt vá 2 (import lại file <code>enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx</code>):</strong><br />
+- ChromaDB: 433 đoạn (sau đợt vá 1, không còn đoạn dataset nào) → <strong>543 đoạn</strong> (413 văn bản luật + 20 tình huống + <strong>110 đoạn KB mới nạp lại</strong>: 103 <code>KB_Articles_Updated</code> + 7 <code>Legal_Update_2025</code>)<br />
+- Quét toàn bộ 110 đoạn <code>import_source="dataset"</code>: <strong>0 đoạn</strong> chứa mẫu văn bản rò rỉ <code>"Câu hỏi: ... / Trả lời: ..."</code> — không tái phát rò rỉ<br />
+- <code>ELS053</code>/<code>ELU200</code> (2 câu bị ảnh hưởng ở đợt vá 1) test lại qua <code>ask_rag()</code>: cả 2 phục hồi đúng — <code>ELS053</code> trích đúng Điều 207 (giải thể khi đang tranh chấp toà án/trọng tài), <code>ELU200</code> từ chối đúng cách hướng dẫn né tránh kê khai chủ sở hữu hưởng lợi, trích đúng Nghị định 168/2025/NĐ-CP<br />
+- <code>evaluate/retrieval_regression_tests.py</code>: vẫn <strong>4/4 pass</strong><br />
+- Quick/Full Evaluation (mục 9) không đổi hành vi — luôn đọc trực tiếp từ file <code>.xlsx</code> trên đĩa, không phụ thuộc ChromaDB</p>
+<h3 id="đại-tu-cơ-chế-ưu-tiên-nguồn--vá-lỗi-chất-lượng-dữ-liệu-2026-07-2930">Đại Tu Cơ Chế Ưu Tiên Nguồn + Vá Lỗi Chất Lượng Dữ Liệu (2026-07-29/30)</h3>
+<p><strong>Bối cảnh:</strong> mục tiêu là làm RAG ưu tiên đúng <code>67/VBHN-VPQH</code> (luật hiện hành) và <code>168/2025/NĐ-CP</code> (nghị định đăng ký mới) hơn <code>59/2020/QH14</code> (luật gốc đã bị thay thế), mà <strong>không</strong> phá các câu vẫn cần trích đúng <code>59/2020/QH14</code>. Toàn bộ đợt việc tóm tắt ở mục 13.8 (đọc mục đó trước để hiểu cơ chế priority/article-level), thêm các phát hiện lỗi dữ liệu thật:</p>
+<ul>
+<li><strong><code>so_ky_hieu</code> bị gán sai cho 20 đoạn</strong> trong <code>KB_Articles_Updated</code>/<code>Legal_Update_2025</code> — nội dung đoạn tự ghi rõ là "Nghị định 168/2025/NĐ-CP"/"67/VBHN-VPQH"/"Luật 76/2025/QH15" nhưng bị import gán cứng <code>so_ky_hieu=59/2020/QH14</code> cho cả sheet (xem chi tiết mục 8). Đã vá cả dữ liệu đang chạy (update thẳng metadata trong ChromaDB) lẫn code import (mục 8) để không tái diễn.</li>
+<li><strong><code>article_number</code> bị hỏng</strong> cho các dòng gộp nhiều Điều (VD "Điều 112-115...") — parser cũ chỉ đọc key số ít <code>article=</code>, bỏ sót key số nhiều <code>articles=</code> mà các dòng gộp dùng, rơi vào nhánh dự phòng ghép mọi chữ số trong <code>article_reference</code> thành 1 chuỗi rác (VD <code>"1121151682025"</code>). Đã vá cả dữ liệu lẫn code.</li>
+<li><strong><code>entity_type</code> gán sai</strong> cho 1 đoạn luật (Điều 18 Nghị định 168/2025/NĐ-CP) — nội dung thực ra áp dụng cho <strong>mọi</strong> loại hình doanh nghiệp (cổ đông JSC, thành viên công ty hợp danh/TNHH, chủ sở hữu TNHH một thành viên đều liệt kê chung 1 Điều) nhưng bị gắn cứng <code>entity_type="llc_multi_member"</code>, khiến bộ lọc loại hình (<code>filter_compatible_docs()</code>, mục 13.6) âm thầm loại bỏ đoạn này khỏi mọi câu hỏi không phải TNHH nhiều thành viên. Đã thêm vào nhóm entity-agnostic (<code>_ENTITY_AGNOSTIC_DOC_TYPES</code>).</li>
+<li><strong><code>evaluate/retrieval_regression_tests.py</code></strong> (bộ 4 câu, mục 11 Bước 5) chạy <strong>sau mỗi thay đổi</strong> trong suốt đợt việc này — luôn giữ 4/4 pass; đồng thời dùng thêm 1 bộ 13 câu thật lấy từ file kết quả Full Evaluation gần nhất (không tốn quota Groq, chỉ so khớp văn bản/Điều được chọn) để đo tiến độ: từ 5/13 đúng lúc bắt đầu lên <strong>13/13 đúng</strong> sau khi xong.</li>
+</ul>
+<p><strong>Kết luận thực tế cho việc dùng hệ thống tiếp theo:</strong><br />
+- Không cần chạy lại import dataset — ChromaDB đang chạy đã được vá trực tiếp, tương đương với việc import lại file đã sửa.<br />
+- Nếu import lại từ đầu (máy khác, hoặc xoá dữ liệu cũ), dùng đúng file <code>enterprise_law_full_rag_chatbot_dataset_200_updated.xlsx</code> hiện tại (chưa cần thêm cột <code>so_ky_hieu</code> tường minh — code tự suy luận đúng từ <code>article_reference</code>/<code>legal_source</code> có sẵn, xem mục 8) là đủ, đã kiểm chứng bằng cách chạy thử hàm import (không phải "chạy thật") trên đúng file này trước khi khẳng định.<br />
+- Vì thay đổi này tác động trực tiếp tới <code>ask_rag()</code> (dùng chung <code>retrieve_docs</code>/<code>select_best_doc</code>/<code>_score_doc</code>), <strong>kết quả Đánh giá RAG (mục 9) chạy lại từ nay sẽ khác</strong> — các câu từng trích dẫn sai văn bản/Điều nêu trên nhiều khả năng đã đúng hơn.</p>
+<hr />
+<h2 id="ghi-chú-thêm">Ghi Chú Thêm</h2>
+<ul>
+<li>Hệ thống hỗ trợ <strong>đa phiên đồng thời</strong> — nhiều người dùng có thể truy cập cùng lúc</li>
+<li>Dữ liệu chat được <strong>lưu vĩnh viễn</strong> trong <code>chat.db</code>; không mất khi restart</li>
+<li>ChromaDB <strong>tích lũy dữ liệu</strong> — import thêm văn bản/tình huống/dataset mới không xóa dữ liệu cũ, trừ khi admin chủ động xoá qua trang Manage Law (mục 11)</li>
+<li>Mọi câu trả lời đều kèm <strong>📖 trích dẫn điều luật chính</strong> và có thể có <strong>📎 nguồn tham khảo phụ</strong> + <strong>🔗 link nguồn</strong></li>
+<li>Hệ thống có cơ chế <strong>retry tự động</strong> khi Groq bị rate limit (3 lần, backoff 5s/10s/15s)</li>
+<li>Admin quản lý được vòng đời tài khoản (kích hoạt/vô hiệu hóa/xoá), import tài khoản hàng loạt kèm báo cáo lỗi chi tiết, và quản lý/xoá dữ liệu đã import theo cả 3 luồng (văn bản luật, dataset, tình huống)</li>
+<li><em>(mới 2026-07-28)</em> Chấm điểm ưu tiên nguồn giờ <strong>mở rộng được qua giao diện</strong> (bảng <code>keyword</code>/<code>source_keyword</code>, mục 13.8) thay vì phải sửa code mỗi khi có văn bản luật mới — Giáo viên cũng được xem/sửa từ khóa của văn bản (không xoá được); Admin quản lý thêm tab Từ khóa riêng, dùng chung cơ chế cho cả danh sách chặn câu hỏi ngoài phạm vi (mục 13.9)</li>
+</ul>
+<hr />
+<h2 id="15-cập-nhật-mới-nhất-2026-08-08">15. Cập Nhật Mới Nhất (2026-08-08)</h2>
+<p>Năm thay đổi trong cùng một đợt cập nhật — mỗi mục dưới đây nêu rõ <strong>là gì / vì sao / cách test</strong> để người kiểm thử không cần đọc code.</p>
+<h3 id="151-vanilla-rag-baseline--so-sánh-đối-chứng-ablation-study">15.1 Vanilla RAG Baseline — So Sánh Đối Chứng (Ablation Study)</h3>
+<p><strong>Là gì:</strong> Một pipeline trả lời thứ hai, <code>ask_rag_vanilla()</code> trong <code>engine/rag_engine.py</code> — đúng nghĩa RAG cơ bản của LangChain: chỉ <code>vectorstore.similarity_search()</code> top-5 (không rerank, không lọc loại hình doanh nghiệp, không kiểm tra lại trích dẫn), một prompt tổng quát, một lần gọi LLM duy nhất. Dùng <strong>cùng</strong> vectorstore, cùng embedding (bge-m3), cùng LLM với pipeline chính (<code>ask_rag()</code>) — biến duy nhất khác là chiến lược truy xuất.</p>
+<p><strong>Vì sao:</strong> Trả lời câu hỏi phản biện "nếu bỏ bộ rerank 8 yếu tố đi, dùng RAG cơ bản thì điểm bao nhiêu?" bằng số đo thật thay vì ước lượng. Kết quả đo thật trên 220 câu (2026-08-07): pipeline tùy biến <strong>89.6/100</strong>, Vanilla RAG <strong>75.9/100</strong> — chênh <strong>+13.7 điểm (+18.1%)</strong>.</p>
+<p><strong>Cách test:</strong><br />
+1. Vào <code>/import</code> → tab <strong>"📊 Dataset"</strong> → khu vực <strong>"🧪 So sánh với Vanilla RAG (baseline)"</strong> (dưới khu vực Đánh giá hệ thống RAG chính).<br />
+2. Bấm <strong>"🧪 Chạy Vanilla RAG (Đánh giá Đầy đủ)"</strong> — chạy Full Evaluation với dataset đang chọn, nhưng qua <code>ask_rag_vanilla</code>.<br />
+3. Sau khi xong, khu vực này tự hiện điểm Vanilla RAG <strong>và</strong> dòng so sánh trực tiếp với điểm pipeline tùy biến gần nhất <strong>của đúng dataset đó</strong> (không so nhầm giữa 2 dataset khác nhau).<br />
+4. Cũng chạy được qua dòng lệnh: <code>python -m engine.evaluate_engine --mode llm --split all --pipeline vanilla</code>.</p>
+<h3 id="152-lưu-trữ-kết-quả-đánh-giá--theo-từng-dataset-không-còn-dùng-chung-1-hạn-mức">15.2 Lưu Trữ Kết Quả Đánh Giá — Theo Từng Dataset (không còn dùng chung 1 hạn mức)</h3>
+<p><strong>Là gì:</strong> Trước đây "chỉ giữ 2 kết quả gần nhất" (mục 9, Bước 3) là <strong>1 hạn mức chung</strong> cho mọi dataset — chạy đánh giá dataset B có thể xoá mất lịch sử dataset A. Giờ mỗi dataset (<code>enterprise_law_..._200_updated.xlsx</code>, một dataset khác, v.v.) giữ <strong>lịch sử 2 lần chạy riêng của chính nó</strong>, cho cả pipeline tùy biến (<code>eval_results_latest.json</code>) lẫn Vanilla RAG (<code>eval_results_vanilla_latest.json</code>) — 2 file JSON này giờ có cấu trúc <code>{"&lt;tên_dataset&gt;": [lần_gần_nhất, lần_trước_đó]}</code> thay vì 1 object phẳng.</p>
+<p><strong>Cách test:</strong> Chạy Full Evaluation trên 2 file dataset khác nhau (nếu có) lần lượt — mở lại tab, đổi dropdown dataset qua lại, xác nhận điểm hiển thị đúng theo dataset đang chọn, không lẫn lộn.</p>
+<h3 id="153-publish--pending--kiểm-soát-nguồn-nào-rag-được-dùng">15.3 Publish / Pending — Kiểm Soát Nguồn Nào RAG Được Dùng</h3>
+<p><strong>Là gì:</strong> Mọi nguồn (Văn bản pháp luật / Dataset / Tình huống) giờ có trạng thái <strong>Pending</strong> hoặc <strong>Published</strong>, lưu ở metadata <code>publish_status</code> trên từng đoạn trong ChromaDB:<br />
+- <strong>Nguồn mới nhập → mặc định Pending.</strong> RAG <strong>hoàn toàn không dùng</strong> nguồn Pending để trả lời — bị loại ở mọi bước truy xuất (<code>retrieve_docs()</code>, tìm kiếm semantic, retriever dự phòng).<br />
+- Dữ liệu import <strong>trước</strong> 2026-08-08 được tự động chuyển thành <strong>Published</strong> ngay khi khởi động lại server lần đầu sau bản cập nhật (không cần thao tác gì) — chatbot đang chạy không bị gián đoạn.<br />
+- Chỉ <strong>Admin</strong> thấy nút đổi trạng thái; Giáo viên chỉ thấy badge trạng thái (read-only), khớp với quyền hạn hiện có ở tab Văn bản pháp luật.</p>
+<p><strong>Cách test:</strong><br />
+1. Vào <code>/manage_law</code>, đăng nhập Admin.<br />
+2. Ở tab bất kỳ (Văn bản pháp luật/Dataset/Tình huống), mỗi dòng có cột <strong>"Trạng thái"</strong> (badge xanh "Đã publish" / vàng "Pending") và nút tương ứng.<br />
+3. Bấm <strong>"Chuyển Pending"</strong> trên một nguồn đang Published — xác nhận → thử hỏi RAG một câu chắc chắn cần nguồn đó, RAG sẽ không dùng được nguồn này nữa (câu trả lời đổi hẳn hoặc báo không tìm thấy thông tin liên quan).<br />
+4. Bấm <strong>"Publish"</strong> lại — RAG dùng được nguồn đó ngay lập tức, không cần restart server.<br />
+5. API trực tiếp (nếu cần test qua Postman/curl): <code>POST /set_source_publish_status</code> với body <code>{"source_type": "law"|"dataset"|"scenario", "source_key": "&lt;so_ky_hieu|tên file&gt;", "status": "published"|"pending"}</code>.</p>
+<blockquote>
+<p><strong>Sửa lỗi liên quan:</strong> nút <strong>"🗂️ Quản lý văn bản luật"</strong> trên sidebar trang chat trước đây chỉ hiện cho Admin dù <code>/manage_law</code> đã hỗ trợ Giáo viên từ 2026-07-28 — Giáo viên phải gõ thẳng URL mới vào được trang. Đã sửa (<code>templates/index.html</code>) để nút hiện đúng cho cả 2 vai trò.</p>
+</blockquote>
+<h3 id="154-nhận-diện-chính-xác-tình-huống-đã-import-exact-scenario-match">15.4 Nhận Diện Chính Xác Tình Huống Đã Import (Exact Scenario Match)</h3>
+<p><strong>Là gì:</strong> Nếu câu hỏi người dùng gõ <strong>gần như nguyên văn</strong> một trong các phần của một tình huống đã import (mục 7) — dòng <code>Tình huống:</code> (mô tả đầy đủ), dòng <code>Câu hỏi:</code> (câu hỏi ngắn), hoặc bất kỳ dòng <code>Câu hỏi tương đương:</code> nào — hệ thống nhận diện đúng ngay tình huống đó (<code>retrieve_docs()</code>'s "EXACT SCENARIO MATCH", <code>engine/rag_engine.py</code>), bỏ qua hoàn toàn bước tính điểm truy xuất theo chủ đề/từ khóa/semantic và bộ rerank 8 yếu tố. Câu trả lời vẫn được LLM sinh ra bình thường (có trích dẫn, không trả thẳng văn bản thô) — chỉ bước <strong>chọn đúng tài liệu nguồn</strong> là được bỏ qua vì đã chắc chắn 100%.</p>
+<p>So khớp không phân biệt hoa/thường, khoảng trắng thừa, và dấu câu kết thúc (<code>?</code>/<code>.</code>/<code>!</code>) — nhưng vẫn là so khớp <strong>chính xác</strong> sau khi chuẩn hoá, không mờ (VD đổi "17 tuổi" thành "18 tuổi" sẽ <strong>không</strong> khớp nhầm).</p>
+<p><strong>Cách test:</strong> Import file tình huống mẫu (mục 7, có sẵn ví dụ TLDN_001 — "Nam 17 tuổi, được cha mẹ cho 500 triệu đồng và muốn tự đứng tên thành lập Công ty TNHH một thành viên Nam Việt để kinh doanh thiết bị điện tử."). Hỏi RAG đúng nguyên văn câu trên, hoặc câu hỏi ngắn hơn "Nam 17 tuổi có thể tự đứng tên thành lập công ty TNHH một thành viên không?" — cả 2 đều trả lời thẳng dựa trên tình huống TLDN_001, không qua truy xuất thông thường.</p>
+<h3 id="155-giới-hạn-150-từ-cho-mỗi-câu-hỏi">15.5 Giới Hạn 150 Từ Cho Mỗi Câu Hỏi</h3>
+<p><strong>Là gì:</strong> Câu hỏi nhập vào ô chat giới hạn tối đa <strong>150 từ</strong> (<code>MAX_QUESTION_WORDS</code> — kiểm tra ở cả <code>static/script.js</code>, phía client, cho phản hồi tức thì, và <code>app.py</code> route <code>/get</code>, phía server, là lớp có hiệu lực thật).</p>
+<p><strong>Vì sao:</strong> Câu hỏi càng dài càng loãng tín hiệu truy xuất — từ khóa khớp chiếm tỷ trọng nhỏ hơn trong tổng số từ, và vector embedding trung bình hoá nhiều ý sẽ trôi xa khỏi đúng chủ đề pháp lý cụ thể. 150 từ đủ rộng cho cả câu hỏi tình huống chi tiết (VD TLDN_001 chỉ ~35-40 từ) nhưng chặn được việc dán nguyên văn bản dài vào ô hỏi.</p>
+<p><strong>Cách test:</strong> Gõ hoặc dán một đoạn trên 150 từ vào ô chat, bấm Gửi — bị chặn ngay (không gọi server) kèm cảnh báo "⚠️ Câu hỏi quá dài (N từ). Vui lòng rút gọn còn tối đa 150 từ." Câu hỏi bình thường (dưới 150 từ, kể cả câu tình huống dài) vẫn gửi được bình thường.</p>
+<h3 id="156-danh-sách-file-đã-thay-đổi-tham-khảo-nhanh-cho-review-code">15.6 Danh Sách File Đã Thay Đổi (tham khảo nhanh cho review code)</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Thay đổi chính</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>engine/rag_engine.py</code></td>
+<td><code>ask_rag_vanilla()</code>, exact scenario match, <code>publish_status</code> filter + backfill + <code>set_source_publish_status()</code></td>
+</tr>
+<tr>
+<td><code>engine/evaluate_engine.py</code></td>
+<td>Tham số <code>pipeline</code> (custom/vanilla), lưu trữ kết quả theo từng dataset (<code>_record_eval_result</code>)</td>
+</tr>
+<tr>
+<td><code>engine/import_law_engine.py</code>, <code>import_dataset_engine.py</code>, <code>import_scenario_engine.py</code></td>
+<td>Gắn <code>publish_status="pending"</code> cho mọi đoạn mới nhập</td>
+</tr>
+<tr>
+<td><code>app.py</code></td>
+<td>Route <code>/set_source_publish_status</code>, giới hạn <code>MAX_QUESTION_WORDS</code> ở <code>/get</code>, <code>/evaluate</code> nhận thêm <code>pipeline</code></td>
+</tr>
+<tr>
+<td><code>templates/index.html</code></td>
+<td>Sửa nút "Quản lý văn bản luật" hiện đúng cho Giáo viên</td>
+</tr>
+<tr>
+<td><code>templates/import_law.html</code></td>
+<td>Khu vực so sánh Vanilla RAG</td>
+</tr>
+<tr>
+<td><code>templates/manage_law.html</code></td>
+<td>Cột "Trạng thái" + nút Publish/Chuyển Pending</td>
+</tr>
+<tr>
+<td><code>static/script.js</code></td>
+<td>Chặn câu hỏi trên 150 từ phía client</td>
+</tr>
+</tbody>
+</table>
+</div>
+<button id="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Lên đầu trang">↑</button>
+<script>
+  const btn = document.getElementById('back-to-top');
+  window.addEventListener('scroll', () => {
+    btn.classList.toggle('show', window.scrollY > 500);
+  });
+</script>
+</body>
+</html>

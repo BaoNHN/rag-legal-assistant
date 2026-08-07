@@ -402,6 +402,18 @@ main {
 }
 .btn-reset:hover { background: rgba(255,255,255,0.10); color: var(--white); }
 
+/* Vanilla RAG baseline comparison */
+.btn-vanilla {
+  width: 100%;
+  background: rgba(217,119,87,0.15); color: #d97757; border: 1.5px solid rgba(217,119,87,0.35);
+  margin-bottom: 12px;
+}
+.btn-vanilla:hover:not(:disabled) { background: rgba(217,119,87,0.25); }
+.vanilla-compare { margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08); }
+.vanilla-compare-row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--white); padding: 4px 0; }
+.vanilla-compare-row .bi-score { color: var(--teal2); font-weight: 600; }
+.vanilla-compare-delta { margin-top: 8px; font-size: 13px; font-weight: 600; color: #d97757; text-align: center; }
+
 .btn-download-result {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   width: 100%;
@@ -691,6 +703,50 @@ main {
           <button class="btn-reset" onclick="resetEval()">↺ Reset đánh giá</button>
         </div>
       </div><!-- /eval-section -->
+
+      <!-- ── Vanilla RAG Baseline Comparison ── -->
+      <div class="divider"></div>
+
+      <div class="eval-section">
+        <h3>🧪 So sánh với Vanilla RAG (baseline)</h3>
+        <p class="eval-desc">
+          Chạy lại <strong>Đánh giá Đầy đủ</strong> (toàn bộ dataset, chấm LLM) nhưng thay bộ truy xuất + rerank
+          tùy biến bằng RAG cơ bản của LangChain: chỉ tìm kiếm vector top-5 (<code>similarity_search</code>),
+          không rerank, không lọc loại hình doanh nghiệp, không kiểm tra lại trích dẫn — dùng cùng vectorstore,
+          cùng embedding, cùng LLM, chỉ khác chiến lược truy xuất. Kết quả lưu riêng, không tính vào hạn mức lưu
+          trữ của Đánh giá Đầy đủ, luôn giữ 2 lần chạy gần nhất.
+        </p>
+
+        <button class="btn-eval btn-vanilla" id="btnVanilla" onclick="startVanillaEval()">
+          🧪 Chạy Vanilla RAG (Đánh giá Đầy đủ)
+        </button>
+
+        <div class="eval-progress" id="vanillaProgress">
+          <div class="prog-label">
+            <span id="vanillaProgLabel">Đang đánh giá Vanilla RAG…</span>
+            <span id="vanillaProgPct">0%</span>
+          </div>
+          <div class="prog-bar-wrap">
+            <div class="prog-bar" id="vanillaProgBar"></div>
+          </div>
+          <div class="eval-msg" id="vanillaMsg"></div>
+        </div>
+
+        <div class="score-card" id="vanillaScoreCard">
+          <div class="score-header">
+            <div class="score-total-wrap">
+              <div class="score-total-num" id="vanillaScoreTotalNum" style="color:#d97757;">–</div>
+              <div class="score-total-sub">/ 100</div>
+              <div style="font-size:11px;color:var(--gray);margin-top:3px;" id="vanillaScoreLabel"></div>
+            </div>
+            <div class="score-meta" id="vanillaScoreMeta"></div>
+          </div>
+
+          <div class="vanilla-compare" id="vanillaCompare" style="display:none;"></div>
+
+          <a class="btn-download-result" id="btnDownloadVanillaResult" href="#" download>⬇️ Tải sheet kết quả Vanilla RAG</a>
+        </div>
+      </div><!-- /vanilla eval-section -->
     </div><!-- /panelDataset -->
 
     <!-- ══ PANEL: SCENARIO (case-study DOCX) ══ -->
@@ -1443,6 +1499,161 @@ function resetEval() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VANILLA RAG BASELINE COMPARISON
+// A separate track from the main Quick/Full/Random buttons above — always
+// runs mode=llm, split=all (the same shape as "Đánh giá Đầy đủ") but against
+// engine.rag_engine.ask_rag_vanilla instead of ask_rag, so the resulting
+// score is directly comparable to the latest Full Evaluation score. Its own
+// job/progress/score-card DOM so a run here never clobbers the main
+// Quick/Full/Random UI state above.
+// ─────────────────────────────────────────────────────────────────────────────
+let vanillaPollTimer = null;
+
+async function startVanillaEval() {
+  const datasetFile = document.getElementById('evalDatasetSelect').value;
+  const entry       = evalDatasets.find(d => d.filename === datasetFile);
+
+  if (!datasetFile) {
+    document.getElementById('vanillaMsg').textContent = '⚠️ Vui lòng chọn file dataset trước.';
+    return;
+  }
+  if (!entry || !entry.dataset_sheets || !entry.dataset_sheets.length) {
+    document.getElementById('vanillaMsg').textContent =
+      `⚠️ File '${datasetFile}' không có sheet Dataset — không thể chạy so sánh Vanilla RAG.`;
+    return;
+  }
+
+  document.getElementById('btnVanilla').disabled        = true;
+  document.getElementById('vanillaScoreCard').style.display = 'none';
+  document.getElementById('vanillaProgress').style.display  = 'block';
+  document.getElementById('vanillaProgBar').style.width      = '0%';
+  document.getElementById('vanillaProgPct').textContent      = '0%';
+  document.getElementById('vanillaProgLabel').textContent    = `🧪 Vanilla RAG — Đánh giá Đầy đủ (${datasetFile})…`;
+  document.getElementById('vanillaMsg').textContent          = 'Đang khởi động…';
+
+  try {
+    const res  = await fetch('/evaluate', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ mode: 'llm', split: 'all', dataset_file: datasetFile, pipeline: 'vanilla' })
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') throw new Error(data.message || 'Lỗi máy chủ');
+    pollVanillaEval(data.job_id);
+  } catch (err) {
+    document.getElementById('vanillaMsg').textContent = '❌ Lỗi: ' + err.message;
+    document.getElementById('btnVanilla').disabled = false;
+  }
+}
+
+function pollVanillaEval(jobId) {
+  clearTimeout(vanillaPollTimer);
+  const DEFAULT_POLL_MS = 2500;
+
+  async function tick() {
+    let nextDelayMs = DEFAULT_POLL_MS;
+    try {
+      const res = await fetch('/evaluate_status/' + jobId);
+      const job = await res.json();
+
+      const pct = job.progress || 0;
+      document.getElementById('vanillaProgBar').style.width = pct + '%';
+      document.getElementById('vanillaProgPct').textContent = pct + '%';
+      if (job.message) document.getElementById('vanillaMsg').textContent = job.message;
+
+      if (job.status === 'done') {
+        document.getElementById('vanillaProgress').style.display = 'none';
+        document.getElementById('btnVanilla').disabled = false;
+        if (job.scores) renderVanillaScore(job.scores);
+        return;
+      } else if (job.status === 'failed') {
+        document.getElementById('vanillaMsg').textContent = job.message || '❌ Đánh giá thất bại';
+        document.getElementById('btnVanilla').disabled = false;
+        return;
+      }
+
+      if (job.next_poll_in) {
+        nextDelayMs = Math.max(DEFAULT_POLL_MS, job.next_poll_in * 1000);
+      }
+    } catch (e) { /* keep polling at default cadence */ }
+    vanillaPollTimer = setTimeout(tick, nextDelayMs);
+  }
+
+  tick();
+}
+
+function renderVanillaScore(sc) {
+  document.getElementById('vanillaScoreTotalNum').textContent = sc.avg_total;
+  document.getElementById('vanillaScoreLabel').textContent =
+    `${sc.total_questions} câu · Vanilla RAG · ${sc.dataset_file || ''}`;
+  document.getElementById('vanillaScoreMeta').innerHTML = `Sheets: ${(sc.sheets_used || []).join(', ')}`;
+
+  const dlBtn = document.getElementById('btnDownloadVanillaResult');
+  if (sc.output_file) {
+    dlBtn.href = '/download_eval_result/' + encodeURIComponent(sc.output_file);
+    dlBtn.style.display = 'flex';
+  } else {
+    dlBtn.style.display = 'none';
+  }
+
+  document.getElementById('vanillaScoreCard').style.display = 'block';
+  // Scoped to the SAME dataset this Vanilla RAG result came from — each
+  // dataset file keeps its own latest-2 history now (see
+  // evaluate_engine._record_eval_result), so comparing against "whatever
+  // custom result happened to run last" could silently mix two different
+  // datasets. sc.dataset_file is the dataset this exact vanilla run used.
+  updateVanillaComparison(sc.dataset_file);
+}
+
+// Compares the latest custom-pipeline result against the latest Vanilla RAG
+// result FOR THE SAME DATASET whenever both exist — the actual "%
+// improvement over baseline" number for the defense, computed from real
+// stored runs on the same question set, not estimated and not cross-dataset.
+async function updateVanillaComparison(datasetFile) {
+  const cmpEl = document.getElementById('vanillaCompare');
+  try {
+    const qs = datasetFile ? ('?dataset_file=' + encodeURIComponent(datasetFile)) : '';
+    const [customRes, vanillaRes] = await Promise.all([
+      fetch('/latest_eval_result' + qs),
+      fetch('/latest_vanilla_eval_result' + qs),
+    ]);
+    const custom  = await customRes.json();
+    const vanilla = await vanillaRes.json();
+
+    if (!custom || custom.status === 'empty' || custom.status === 'error' ||
+        !vanilla || vanilla.status === 'empty' || vanilla.status === 'error') {
+      cmpEl.style.display = 'none';
+      return;
+    }
+
+    const delta    = custom.avg_total - vanilla.avg_total;
+    const deltaPct = vanilla.avg_total ? (delta / vanilla.avg_total * 100) : 0;
+    const sign     = delta >= 0 ? '+' : '';
+
+    cmpEl.innerHTML = `
+      <div style="font-size:10.5px;color:var(--gray);margin-bottom:6px;">So sánh trên dataset: ${custom.dataset_file || datasetFile || '—'}</div>
+      <div class="vanilla-compare-row"><span>Pipeline tùy biến (hiện tại)</span><span class="bi-score">${custom.avg_total}/100</span></div>
+      <div class="vanilla-compare-row"><span>Vanilla RAG (baseline)</span><span class="bi-score">${vanilla.avg_total}/100</span></div>
+      <div class="vanilla-compare-delta">${sign}${delta.toFixed(1)} điểm (${sign}${deltaPct.toFixed(1)}%) nhờ retrieval/rerank tùy biến</div>
+    `;
+    cmpEl.style.display = 'block';
+  } catch (e) {
+    cmpEl.style.display = 'none';
+  }
+}
+
+// Show the most recent Vanilla RAG comparison result on page open, if one exists
+async function loadLatestVanillaEvalResult() {
+  try {
+    const res  = await fetch('/latest_vanilla_eval_result');
+    const data = await res.json();
+    if (data && data.status !== 'empty' && data.status !== 'error') {
+      renderVanillaScore(data);
+    }
+  } catch (e) { /* no persisted vanilla result yet — leave card hidden */ }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SHARED POLLING UTILITY
 // ─────────────────────────────────────────────────────────────────────────────
 function pollJob(endpoint, jobId, bannerId, msgId, onDone, onFail) {
@@ -1534,6 +1745,7 @@ async function loadLatestEvalResult() {
   } catch (e) { /* no persisted result yet — leave score card hidden */ }
 }
 loadLatestEvalResult();
+loadLatestVanillaEvalResult();
 </script>
 </body>
 </html>

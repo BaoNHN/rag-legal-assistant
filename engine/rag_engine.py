@@ -88,7 +88,7 @@ vectorstore = Chroma(
     embedding_function=embedding
 )
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+retriever = vectorstore.as_retriever(search_kwargs={"k": 5, "filter": {"publish_status": "published"}})
 
 # =========================
 # LLM
@@ -213,8 +213,14 @@ def list_indexed_sources() -> list:
     counts = Counter((m.get("so_ky_hieu") or "").strip() for m in metas)
     counts.pop("", None)
     importers = _first_importer_by_key(metas, "so_ky_hieu")
+    statuses  = _first_publish_status_by_key(metas, "so_ky_hieu")
     return [
-        {"so_ky_hieu": k, "chunk_count": v, "importer": importers.get(k, DEFAULT_IMPORTER)}
+        {
+            "so_ky_hieu":     k,
+            "chunk_count":    v,
+            "importer":       importers.get(k, DEFAULT_IMPORTER),
+            "publish_status": statuses.get(k, "published"),
+        }
         for k, v in sorted(counts.items())
     ]
 
@@ -322,6 +328,19 @@ def _first_importer_by_key(metas: list, key: str, default_group: str = "") -> di
     return result
 
 
+def _first_publish_status_by_key(metas: list, key: str, default_group: str = "") -> dict:
+    """Same pattern as _first_importer_by_key, for publish_status — every
+    chunk of one source is always set atomically together (see
+    set_source_publish_status), so the first value seen per group is the
+    group's real status, not just a guess."""
+    result = {}
+    for m in metas:
+        group = (m.get(key) or "").strip() or default_group
+        if group and group not in result:
+            result[group] = m.get("publish_status") or "published"
+    return result
+
+
 def backfill_importer_tags():
     """One-time migration for chunks indexed before the importer field
     existed. Idempotent — only touches chunks missing it, so it's cheap and
@@ -340,6 +359,36 @@ def backfill_importer_tags():
             continue
         new_meta = dict(m)
         new_meta["importer"] = DEFAULT_IMPORTER
+        update_ids.append(doc_id)
+        update_metas.append(new_meta)
+
+    if update_ids:
+        vectorstore._collection.update(ids=update_ids, metadatas=update_metas)
+
+
+def backfill_publish_status_tags():
+    """One-time migration for chunks indexed before the publish/pending
+    feature existed (2026-08-08). Grandfathers them in as "published" rather
+    than "pending" — the alternative (defaulting missing status to "pending")
+    would silently pull every already-imported source out of RAG the moment
+    this code ships, until an admin manually re-published each one. Only
+    sources imported from here on start "pending" (see import_law_engine.py/
+    import_dataset_engine.py/import_scenario_engine.py's own meta dicts).
+    Idempotent — only touches chunks missing the field, safe on every startup."""
+    try:
+        data = vectorstore.get(include=["metadatas"])
+    except Exception:
+        return
+
+    ids   = data.get("ids") or []
+    metas = data.get("metadatas") or []
+
+    update_ids, update_metas = [], []
+    for doc_id, m in zip(ids, metas):
+        if m.get("publish_status"):
+            continue
+        new_meta = dict(m)
+        new_meta["publish_status"] = "published"
         update_ids.append(doc_id)
         update_metas.append(new_meta)
 
@@ -438,8 +487,14 @@ def list_dataset_sources() -> list:
     metas = data["metadatas"]
     counts = Counter((m.get("source_file") or UNKNOWN_SOURCE_FILE_LABEL).strip() for m in metas)
     importers = _first_importer_by_key(metas, "source_file", UNKNOWN_SOURCE_FILE_LABEL)
+    statuses  = _first_publish_status_by_key(metas, "source_file", UNKNOWN_SOURCE_FILE_LABEL)
     return [
-        {"name": k, "chunk_count": v, "importer": importers.get(k, DEFAULT_IMPORTER)}
+        {
+            "name":           k,
+            "chunk_count":    v,
+            "importer":       importers.get(k, DEFAULT_IMPORTER),
+            "publish_status": statuses.get(k, "published"),
+        }
         for k, v in sorted(counts.items())
     ]
 
@@ -473,8 +528,14 @@ def list_scenario_sources() -> list:
     metas = data["metadatas"]
     counts = Counter((m.get("nguon_thu_thap") or UNKNOWN_SOURCE_FILE_LABEL).strip() for m in metas)
     importers = _first_importer_by_key(metas, "nguon_thu_thap", UNKNOWN_SOURCE_FILE_LABEL)
+    statuses  = _first_publish_status_by_key(metas, "nguon_thu_thap", UNKNOWN_SOURCE_FILE_LABEL)
     return [
-        {"name": k, "chunk_count": v, "importer": importers.get(k, DEFAULT_IMPORTER)}
+        {
+            "name":           k,
+            "chunk_count":    v,
+            "importer":       importers.get(k, DEFAULT_IMPORTER),
+            "publish_status": statuses.get(k, "published"),
+        }
         for k, v in sorted(counts.items())
     ]
 
@@ -498,11 +559,56 @@ def delete_scenario_source(name: str) -> int:
     return len(ids)
 
 
+# ── Publish / Pending ────────────────────────────────────────────────────────
+# A newly imported source starts "pending" (see the three import engines' own
+# meta dicts) — admin must explicitly publish it before RAG will ever use it
+# to answer a question (see retrieve_docs' publish_status filter and the
+# module-level `retriever`'s search_kwargs above). Per user request
+# 2026-08-08: lets an admin stage/review a source before it can affect real
+# answers, and pull a bad one back to "pending" without deleting it outright.
+_PUBLISH_STATUS_WHERE = {
+    "law":      lambda key: {"so_ky_hieu": key},
+    "dataset":  lambda key: {"$and": [{"import_source": "dataset"}, {"source_file": key}]},
+    "scenario": lambda key: {"$and": [{"doc_type": "scenario_qa"}, {"nguon_thu_thap": key}]},
+}
+
+
+def set_source_publish_status(source_type: str, source_key: str, status: str) -> int:
+    """Sets publish_status ("published"/"pending") on every chunk of one
+    source, grouped the same way that source type's own list_*/delete_*
+    functions already group it (so_ky_hieu for law, source_file for dataset,
+    nguon_thu_thap for scenario). Returns the number of chunks updated (0 if
+    the source doesn't exist or source_type is invalid)."""
+    if status not in ("published", "pending"):
+        raise ValueError(f"invalid publish status: {status!r}")
+
+    where_fn = _PUBLISH_STATUS_WHERE.get(source_type)
+    source_key = (source_key or "").strip()
+    if not where_fn or not source_key:
+        return 0
+
+    existing = vectorstore.get(where=where_fn(source_key), include=["metadatas"])
+    ids   = existing.get("ids") or []
+    metas = existing.get("metadatas") or []
+    if not ids:
+        return 0
+
+    new_metas = []
+    for m in metas:
+        nm = dict(m)
+        nm["publish_status"] = status
+        new_metas.append(nm)
+
+    vectorstore._collection.update(ids=ids, metadatas=new_metas)
+    return len(ids)
+
+
 # Populate the whitelist once at startup so it reflects chroma_db even if no
 # import happens during this process's lifetime.
 refresh_citation_sources()
 backfill_import_source_tags()
 backfill_importer_tags()
+backfill_publish_status_tags()
 # backfill_entity_type_tags() runs at the true bottom of this module (after
 # ask_rag) — it needs _ENTITY_AGNOSTIC_DOC_TYPES/detect_entity_type, both
 # defined further down the file, not yet bound at this point in module load.
@@ -982,12 +1088,46 @@ def _source_keyword_candidates(question: str, all_docs: list, source_keywords_ma
 # 2. Fall back to standard semantic search if no match
 # This eliminates wrong article retrieval (Điều 34 instead of 36, etc.)
 # =========================
+_SCENARIO_MATCH_PREFIXES = ("Mô tả: ", "Câu hỏi: ")
+_SCENARIO_ALT_PREFIX     = "Câu hỏi tương đương: "
+
+
+def _extract_scenario_match_texts(content: str) -> list:
+    """Every phrasing a user might type verbatim for a scenario_qa chunk (see
+    import_scenario_engine._build_case_doc's fixed line format): the "Mô tả:"
+    scenario paragraph itself, the canonical "Câu hỏi:" line, and each
+    "Câu hỏi tương đương:" alternative. Matching any of these (near-)verbatim
+    means the question IS this exact curated case, not merely similar to it."""
+    texts = []
+    for line in content.split("\n"):
+        for prefix in _SCENARIO_MATCH_PREFIXES:
+            if line.startswith(prefix):
+                texts.append(line[len(prefix):].strip())
+        if line.startswith(_SCENARIO_ALT_PREFIX):
+            texts.extend(q.strip() for q in line[len(_SCENARIO_ALT_PREFIX):].split("|") if q.strip())
+    return texts
+
+
+def _normalize_exact_match(text: str) -> str:
+    """Stricter than normalize_text() alone — also drops a trailing sentence
+    terminator (?/./!/…) so "...không?", "...không ?" and "...không." still
+    count as the same question, without resorting to fuzzy similarity: a
+    genuinely different (or merely typo'd) question must NOT match here,
+    since retrieve_docs' EXACT SCENARIO MATCH trusts this to answer straight
+    from one specific curated case with no further retrieval scoring at all."""
+    return normalize_text(text).rstrip("?.!…")
+
+
 def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = None):
     topic = extract_topic_from_question(question)
     article_nums = extract_article_number_from_question(question)
 
     try:
-        results = vectorstore.get(include=["documents", "metadatas"])
+        # publish_status="published" only — a "pending" source (freshly
+        # imported, not yet reviewed/approved by an admin) must never
+        # contribute to a real answer. See set_source_publish_status() and
+        # the three import engines' meta dicts.
+        results = vectorstore.get(where={"publish_status": "published"}, include=["documents", "metadatas"])
         all_docs = []
 
         for doc_text, meta in zip(results["documents"], results["metadatas"]):
@@ -995,6 +1135,31 @@ def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = N
                 page_content=doc_text,
                 metadata=meta
             ))
+
+        # ===== EXACT SCENARIO MATCH =====
+        # A question typed (near-)verbatim as one of a curated scenario
+        # case's own phrasings — its "Tình huống:" description, its
+        # canonical "Câu hỏi:", or a listed "Câu hỏi tương đương:" (see
+        # import_scenario_engine.py's DOCX format) — IS that exact case, not
+        # merely similar to it. There's nothing left to compute: semantic/
+        # keyword retrieval and the 8-factor rerank in _score_doc() exist to
+        # guess which document best answers an unstructured question; here
+        # the question already equals the document's own text. Short-
+        # circuits straight to that one case's chunk, the same way an exact
+        # "Điều N" match does below — skips topic/keyword/semantic scoring
+        # entirely (per user request 2026-08-08; example: TLDN_001 in
+        # BO_20_TINH_HUONG_THANH_LAP_DOANH_NGHIEP_CHATBOT_2026.docx, matched
+        # either by its full "Tình huống:" paragraph or by its shorter
+        # "Câu hỏi:" line).
+        q_exact = _normalize_exact_match(question)
+        if q_exact:
+            scenario_exact = [
+                d for d in all_docs
+                if d.metadata.get("doc_type") == "scenario_qa"
+                and any(_normalize_exact_match(t) == q_exact for t in _extract_scenario_match_texts(d.page_content))
+            ]
+            if scenario_exact:
+                return scenario_exact
 
         # ===== EXACT ARTICLE NUMBER MATCH =====
         # "Điều 143" etc. — filter on article_number metadata exactly instead
@@ -1097,7 +1262,9 @@ def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = N
         # chance to consider them.
         kw_candidates = _keyword_recall(question, all_docs)
 
-        results_with_scores = vectorstore.similarity_search_with_score(rewritten_q, k=5)
+        results_with_scores = vectorstore.similarity_search_with_score(
+            rewritten_q, k=5, filter={"publish_status": "published"}
+        )
         # rewrite_query() is itself an LLM call with no guaranteed
         # reproducibility — a differently-worded paraphrase on a different
         # run can shift which candidates the ONE semantic search below even
@@ -1112,7 +1279,9 @@ def retrieve_docs(question: str, rewritten_q: str, source_keywords_map: dict = N
         # rewrite-independent anchor — cheap (one extra vector search, no
         # extra LLM call) since `question` is already in hand.
         if rewritten_q != question:
-            results_with_scores += vectorstore.similarity_search_with_score(question, k=5)
+            results_with_scores += vectorstore.similarity_search_with_score(
+                question, k=5, filter={"publish_status": "published"}
+            )
         # Filter: L2 distance lower = more similar; reject docs above threshold
         semantic_candidates = [doc for doc, score in results_with_scores if score <= SIMILARITY_THRESHOLD]
         # Keyed by page_content (this function's own dedup key, see `seen`
@@ -2271,6 +2440,62 @@ def ask_rag(question: str, return_debug: bool = False, voice: str = "formal"):
 
     except Exception as e:
         print("RAG ERROR:", e)
+        return RAG_SYSTEM_ERROR_MESSAGE
+
+
+# =========================
+# VANILLA RAG BASELINE
+# ─────────────────────────
+# Ablation baseline for the defense question "what score would a plain
+# LangChain vector-search RAG get instead of all this custom retrieval/
+# rerank machinery?" (see engine/evaluate_engine.py's `pipeline` param).
+# Deliberately reimplements the textbook minimum — one similarity_search,
+# one generic prompt, one LLM call — with NONE of ask_rag()'s custom layers:
+# no rewrite_query, no retrieve_docs() hybrid merge (topic/keyword/semantic/
+# procedure-intent), no select_best_doc() 8-factor rerank, no
+# filter_compatible_docs() entity-type gate, no validate_answer_citations()
+# retry loop, no build_citation()/build_legal_basis_line() metadata-driven
+# footer. Reuses the SAME `vectorstore` (same ChromaDB, same bge-m3
+# embeddings) and SAME `llm` (same Groq model, via the same
+# _llm_invoke_with_retry rate-limit handling) as ask_rag() — the only
+# variable that changes is the retrieval/generation strategy, so a score
+# difference between the two pipelines measures the custom layers'
+# contribution, not a different knowledge base or a flakier API call.
+VANILLA_PROMPT_TEMPLATE = """Bạn là trợ lý pháp lý. Dựa vào ngữ cảnh pháp luật dưới đây, hãy trả lời câu hỏi của người dùng bằng tiếng Việt, ngắn gọn và chính xác. Nếu ngữ cảnh có nêu số Điều liên quan, hãy trích dẫn số Điều đó trong câu trả lời.
+
+Ngữ cảnh:
+{context}
+
+Câu hỏi: {question}
+
+Trả lời:"""
+
+
+def ask_rag_vanilla(question: str, return_debug: bool = False):
+    """Vanilla RAG baseline: LangChain's own `vectorstore.similarity_search`
+    (top-5, no custom scoring) + a single generic prompt + one LLM call. See
+    the module comment above for what this isolates and why it exists."""
+    try:
+        question = str(question)
+        docs = vectorstore.similarity_search(question, k=5)
+        if not docs:
+            return "⚠️ Không tìm thấy thông tin đủ liên quan trong cơ sở dữ liệu."
+
+        context = "\n\n---\n\n".join(d.page_content for d in docs)[:3000]
+        prompt  = VANILLA_PROMPT_TEMPLATE.format(context=context, question=question)
+        answer  = clean_answer(_llm_invoke_with_retry(prompt))
+
+        if return_debug:
+            return {
+                "answer": answer,
+                "retrieved_context": context,
+                "metadata": docs[0].metadata,
+                "question_type": "",
+            }
+        return answer
+
+    except Exception as e:
+        print("VANILLA RAG ERROR:", e)
         return RAG_SYSTEM_ERROR_MESSAGE
 
 
