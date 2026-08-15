@@ -155,8 +155,9 @@ def llm_score(question: str, generated: str, expected: str,
     Use Groq LLM to evaluate quality against the rubric.
     Returns scores dict.
     """
-    from engine.groq_keys import current_key
-    llm = ChatGroq(api_key=groq_api_key or current_key(), model="openai/gpt-oss-20b", temperature=0)
+    from engine.groq_keys import current_key, reasoning_model_kwargs
+    judge_model = "openai/gpt-oss-20b"
+    llm = ChatGroq(api_key=groq_api_key or current_key(), model=judge_model, temperature=0, **reasoning_model_kwargs(judge_model))
 
     prompt = f"""Bạn là giáo viên chấm điểm câu trả lời pháp lý.
 
@@ -342,6 +343,12 @@ def run_evaluation(split: str, mode: str, max_questions: int = None):
 # ENTRY POINT
 # =========================
 if __name__ == "__main__":
+    # See app.py's matching reconfigure for why: Vietnamese print output
+    # otherwise UnicodeEncodeErrors under the ANSI codepage a redirected/
+    # piped (non-console) stdout falls back to.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="Evaluate RAG system")
     parser.add_argument("--mode",  choices=["auto","llm"], default="auto",
                         help="Scoring mode: auto (fast) or llm (accurate)")

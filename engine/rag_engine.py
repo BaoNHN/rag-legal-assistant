@@ -72,7 +72,7 @@ DEFINITION_PATTERNS = [
     "quy định về",
 ]
 
-from engine.groq_keys import current_key, rotate_key, get_keys, is_rate_limit_error
+from engine.groq_keys import current_key, rotate_key, get_keys, is_rate_limit_error, reasoning_model_kwargs
 
 # =========================
 # EMBEDDING + VECTORSTORE
@@ -98,7 +98,8 @@ LLM_MODEL = "openai/gpt-oss-20b"  # migrated 2026-08-14: llama-3.1-8b-instant de
 llm = ChatGroq(
     api_key=current_key(),
     model=LLM_MODEL,
-    temperature=0
+    temperature=0,
+    **reasoning_model_kwargs(LLM_MODEL),
 )
 
 
@@ -891,7 +892,7 @@ def _llm_invoke_with_retry(prompt: str, retries: int = 3) -> str:
         except Exception as e:
             if is_rate_limit_error(e) and rotations_left > 0:
                 rotations_left -= 1
-                llm = ChatGroq(api_key=rotate_key(), model=LLM_MODEL, temperature=0)
+                llm = ChatGroq(api_key=rotate_key(), model=LLM_MODEL, temperature=0, **reasoning_model_kwargs(LLM_MODEL))
                 print(f"  ⚠ Groq rate limit — rotating API key ({rotations_left} left)")
                 continue
             err = str(e).lower()

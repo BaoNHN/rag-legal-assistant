@@ -73,3 +73,28 @@ def is_rate_limit_error(e: Exception) -> bool:
     except ImportError:
         pass
     return any(m in str(e).lower() for m in _RATE_LIMIT_MARKERS)
+
+
+def reasoning_model_kwargs(model: str) -> dict:
+    """Extra ChatGroq kwargs needed for openai/gpt-oss-* models specifically.
+
+    These are reasoning models: Groq's default 2048-token completion cap is
+    shared between hidden reasoning tokens and the actual visible answer, and
+    at reasoning_effort="medium" (the API default) the model can burn the
+    *entire* cap on reasoning before emitting any visible text —
+    finish_reason="length", content="". Reproduced directly 2026-08-15
+    migrating LLM_MODEL/JUDGE_MODEL to gpt-oss (see rag_engine.py/
+    evaluate_engine.py): 2/3 and 1/3 repeated runs on the same prompt hit
+    this, and the resulting blank answer sails straight through
+    validate_answer_citations() (nothing in an empty string to reject) and
+    ships with only the citation footer attached — a silent, wrong-looking-
+    fine failure, not an exception anything catches.
+    max_tokens=4096 gives reasoning + a real answer room to both fit;
+    reasoning_effort="low" independently cuts how much of that budget
+    reasoning actually uses (confirmed on repeat-testing: reasoning_tokens
+    dropped from ~2046 to single/low-double digits, 8/8 clean runs). Not
+    applicable to non-gpt-oss models (e.g. llama-3.x) — passing
+    reasoning_effort to those errors."""
+    if model.startswith("openai/gpt-oss"):
+        return {"max_tokens": 4096, "model_kwargs": {"reasoning_effort": "low"}}
+    return {}

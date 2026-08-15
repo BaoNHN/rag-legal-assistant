@@ -34,10 +34,16 @@ _RAG_ERROR_TEXT = "Lỗi hệ thống"
 # right one), and got stuck returning all-zero scores for some prompts no
 # matter how many times retried. Directly A/B tested 4 of the worst-offending
 # cases against llama-3.3-70b-versatile — perfect or near-perfect, sane
-# scores on all 4, no hallucinated reasoning (2026-07-29 review). Lower
-# TPD budget than 8b-instant (100K vs 500K) but a 100-question full-eval
-# uses well under that.
-JUDGE_MODEL = "llama-3.3-70b-versatile"
+# scores on all 4, no hallucinated reasoning (2026-07-29 review).
+#
+# Migrated again 2026-08-15: Groq is decommissioning llama-3.3-70b-versatile
+# on 2026-08-16 (same deadline as the 8b-instant chat model above), per their
+# deprecation email recommending openai/gpt-oss-120b or qwen3.6-27b as
+# replacements. Picked gpt-oss-120b — same family as the openai/gpt-oss-20b
+# chat model already in production, and the larger 120b variant keeps the
+# judge intentionally more capable than the chat model it's grading, same
+# rationale as the original non-same-model choice above.
+JUDGE_MODEL = "openai/gpt-oss-120b"
 
 # There's no UI to browse historical eval runs, only the most recent ones
 # matter — keep disk clutter down by pruning older eval_results_*.xlsx files
@@ -445,10 +451,10 @@ def _llm_score(question: str, generated: str, expected: str,
     questions, several of which had answers matching the expected answer
     almost verbatim — the RAG system wasn't at fault, the judge call was."""
     from langchain_groq import ChatGroq
-    from engine.groq_keys import get_keys, current_key, rotate_key, is_rate_limit_error
+    from engine.groq_keys import get_keys, current_key, rotate_key, is_rate_limit_error, reasoning_model_kwargs
 
     keys = get_keys()
-    llm = ChatGroq(api_key=current_key(), model=JUDGE_MODEL, temperature=0)
+    llm = ChatGroq(api_key=current_key(), model=JUDGE_MODEL, temperature=0, **reasoning_model_kwargs(JUDGE_MODEL))
     # Lazily created only if a ValueError retry actually needs it (see below) —
     # a second client at a non-zero temperature so a retry isn't just the
     # first, deterministic call played back verbatim. Reset to None whenever
@@ -599,7 +605,7 @@ Chỉ trả về JSON, không giải thích thêm. Ví dụ:
             # scores sometimes, but never all five axes at 0 again).
             if value_error_retries < 2:
                 if llm_warm is None:
-                    llm_warm = ChatGroq(api_key=current_key(), model=JUDGE_MODEL, temperature=0.7)
+                    llm_warm = ChatGroq(api_key=current_key(), model=JUDGE_MODEL, temperature=0.7, **reasoning_model_kwargs(JUDGE_MODEL))
                 used_warm = True
                 value_error_retries += 1
                 print(f"  [retry {value_error_retries}/2] temperature=0.7, no wait (temp=0 response was invalid) — {str(e)[:120]}")
@@ -612,7 +618,7 @@ Chỉ trả về JSON, không giải thích thêm. Ví dụ:
             # the fixed backoff schedule below.
             if is_rate_limit_error(e) and key_rotations_left > 0:
                 key_rotations_left -= 1
-                llm = ChatGroq(api_key=rotate_key(), model=JUDGE_MODEL, temperature=0)
+                llm = ChatGroq(api_key=rotate_key(), model=JUDGE_MODEL, temperature=0, **reasoning_model_kwargs(JUDGE_MODEL))
                 llm_warm = None
                 used_warm = False
                 print(f"  [429] Groq key rate-limited — rotating key ({key_rotations_left} left, no wait)")
@@ -1310,7 +1316,12 @@ def _run_cli(mode: str, split: str, pipeline: str = "custom"):
 
 if __name__ == "__main__":
     import argparse
-    sys.stdout.reconfigure(encoding="utf-8")
+    # stderr too, not just stdout: traceback.print_exc() in run_evaluation's
+    # except block writes there, and a Vietnamese judge "reason" embedded in
+    # a raised error can otherwise UnicodeEncodeError under the ANSI codepage
+    # a non-console (redirected/piped) stdout falls back to.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     parser = argparse.ArgumentParser(description="Evaluate RAG system (standalone)")
     parser.add_argument("--mode",  choices=["auto", "llm"], default="auto",

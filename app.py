@@ -1,3 +1,20 @@
+import sys
+
+# Every user-facing message in this app is Vietnamese. Attached to a real
+# Windows console Python already emits UTF-8, but the moment stdout/stderr is
+# redirected to a file or pipe (log file, service wrapper, `> out.log`), it
+# falls back to the system ANSI codepage (cp1252 here) and any print()
+# containing Vietnamese diacritics raises UnicodeEncodeError. Worst case this
+# hits inside an except-block's own error-reporting print (e.g.
+# run_evaluation's traceback.print_exc() in engine/evaluate_engine.py), which
+# then dies silently instead of marking the job "failed" — the admin UI is
+# left showing "running" forever. Reconfigured once here, first thing, since
+# background threads (eval jobs, etc.) share this same process's stdout/stderr.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from fastapi import FastAPI, Request, Form, File, UploadFile, BackgroundTasks, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
